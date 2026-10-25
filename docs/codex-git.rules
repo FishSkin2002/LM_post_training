@@ -1,0 +1,21 @@
+# Routine writes use an installed, sandbox-protected argument-validating entry point.
+prefix_rule(
+    pattern = ["/usr/bin/python3", "-I", "-S", "/mnt/c/Users/yunli/.codex/bin/qwen-git-workflow.py"],
+    decision = "allow",
+    match = ["/usr/bin/python3 -I -S /mnt/c/Users/yunli/.codex/bin/qwen-git-workflow.py commit -m Example"],
+    not_match = ["python3 tools/git_workflow.py commit -m Example"],
+)
+prefix_rule(
+    pattern = ["git", "-C", "/home/yunli/code/qwen/codex", "add", "--"],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["git", "-C", "/home/yunli/code/qwen/codex", ["push", "commit", "switch", "checkout", "reset", "rebase", "update-ref", "filter-branch", "fetch", "merge", "revert", "cherry-pick"]],
+    decision = "forbidden",
+    justification = "Use the installed qwen-git-workflow.py entry point. Existing branch history must be preserved.",
+)
+prefix_rule(
+    pattern = ["git", "-C", "/home/yunli/code/qwen/codex", "branch", ["-d", "-D", "--delete", "-f", "--force", "-m", "-M", "--move", "-c", "-C", "--copy"]],
+    decision = "forbidden",
+    justification = "Keep existing branches and commits. Start a new codex/ branch for new work.",
+)
