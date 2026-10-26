@@ -1,0 +1,15 @@
+# 默认训练环境：租用的 32 GB 显存 GPU。
+output_dir: outputs/gsm8k-sft
+num_train_epochs: 3
+learning_rate: 0.00002
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 4
+optim: adamw_torch
+bf16: auto
+gradient_checkpointing: false
+logging_steps: 10
+logging_first_step: true
+save_strategy: epoch
+save_total_limit: 2
+report_to: none
+seed: 42
