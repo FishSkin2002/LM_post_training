@@ -82,6 +82,8 @@ def fetch_main():
 
 def push_branch(name):
     branch_name(name)
+    if name == "main":
+        raise Rejected("Update main through a GitHub pull request, not a direct push.")
     ref = "refs/heads/" + name
     local = output("rev-parse", "--verify", ref + "^{commit}")
     remote_rows = output("ls-remote", "--heads", "origin", ref).splitlines()
@@ -110,7 +112,8 @@ def main(argv=None):
         ensure_idle()
         if args.action == "start":
             name = branch_name(args.branch, feature=True)
-            git("switch", "--create", name, "main")
+            fetch_main()
+            git("switch", "--no-track", "--create", name, "refs/remotes/origin/main")
         elif args.action == "switch":
             git("switch", "--no-guess", branch_name(args.branch))
         elif args.action == "commit":
@@ -121,11 +124,10 @@ def main(argv=None):
         elif args.action == "fetch":
             fetch_main()
         elif args.action == "merge":
-            if current_branch() != "main":
-                raise Rejected("Merge must start on main.")
-            name = branch_name(args.branch, feature=True)
+            if current_branch() == "main":
+                raise Rejected("Merge into main through a GitHub pull request, not locally.")
+            name = branch_name(args.branch)
             git("merge", "--no-ff", "--message=Merge " + name, "refs/heads/" + name)
-            push_branch("main")
         elif args.action == "revert":
             current_branch(feature=True)
             if not re.fullmatch(r"[0-9a-fA-F]{7,40}", args.commit):

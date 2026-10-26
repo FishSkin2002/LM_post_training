@@ -56,19 +56,82 @@ class GitWorkflowTests(unittest.TestCase):
         self.assertEqual(self.act("commit", "-m", "Add a change"), 0)
         return self.tip()
 
-    def test_normal_start_commit_push_merge_and_revert(self):
+    def test_normal_start_commit_push_non_main_merge_and_revert(self):
         self.assertEqual(self.act("start", "codex/example"), 0)
         changed = self.change()
         self.assertEqual(self.tip("HEAD^"), self.base)
         self.assertEqual(self.act("push", "codex/example"), 0)
-        self.assertEqual(self.act("switch", "main"), 0)
+        self.assertEqual(self.act("start", "codex/integration"), 0)
         self.assertEqual(self.act("merge", "codex/example"), 0)
-        self.assertEqual(self.tip("main", self.remote), self.tip("main"))
+        self.assertEqual(self.tip("main"), self.base)
+        self.assertEqual(self.tip("main", self.remote), self.base)
         self.assertTrue(workflow.is_ancestor(changed, self.tip()))
-        self.assertEqual(self.act("start", "codex/revert"), 0)
+        self.assertEqual(
+            self.run_git(self.repo, "ls-remote", "origin", "refs/heads/codex/integration"), ""
+        )
+        self.assertEqual(self.act("push", "codex/integration"), 0)
+        self.assertEqual(self.tip("codex/integration", self.remote), self.tip())
         before = self.tip()
         self.assertEqual(self.act("revert", changed), 0)
         self.assertEqual(self.tip("HEAD^"), before)
+
+    def test_rejects_local_main_merge_without_changing_main(self):
+        self.assertEqual(self.act("start", "codex/example"), 0)
+        self.change()
+        self.assertEqual(self.act("switch", "main"), 0)
+        self.assertEqual(self.act("merge", "codex/example"), 1)
+        self.assertEqual(self.tip("main"), self.base)
+        self.assertEqual(self.tip("main", self.remote), self.base)
+        self.assertEqual(self.run_git(self.repo, "status", "--porcelain"), "")
+
+    def test_rejects_direct_main_push_without_changing_remote(self):
+        self.run_git(self.repo, "commit", "--allow-empty", "-m", "Local main advance")
+        local = self.tip()
+        self.assertEqual(self.act("push", "main"), 1)
+        self.assertEqual(self.tip("main"), local)
+        self.assertEqual(self.tip("main", self.remote), self.base)
+
+    def test_can_merge_main_into_feature_without_publishing_main(self):
+        self.assertEqual(self.act("start", "codex/target"), 0)
+        self.assertEqual(self.act("switch", "main"), 0)
+        self.run_git(self.repo, "commit", "--allow-empty", "-m", "Advance local main")
+        main = self.tip()
+        self.assertEqual(self.act("switch", "codex/target"), 0)
+        self.assertEqual(self.act("merge", "main"), 0)
+        self.assertTrue(workflow.is_ancestor(main, self.tip()))
+        self.assertEqual(self.tip("main"), main)
+        self.assertEqual(self.tip("main", self.remote), self.base)
+
+    def test_can_merge_into_other_unprefixed_branch(self):
+        self.assertEqual(self.act("start", "codex/example"), 0)
+        changed = self.change()
+        self.run_git(self.repo, "branch", "develop", self.base)
+        self.assertEqual(self.act("switch", "develop"), 0)
+        self.assertEqual(self.act("merge", "codex/example"), 0)
+        self.assertTrue(workflow.is_ancestor(changed, self.tip("develop")))
+        self.assertEqual(self.tip("main"), self.base)
+        self.assertEqual(self.tip("main", self.remote), self.base)
+
+    def test_rejects_foreign_prefix_merge_target(self):
+        self.assertEqual(self.act("start", "codex/example"), 0)
+        changed = self.change()
+        self.run_git(self.repo, "switch", "-c", "other/target", self.base)
+        self.assertEqual(self.act("merge", "codex/example"), 1)
+        self.assertEqual(self.tip(), self.base)
+        self.assertEqual(self.tip("codex/example"), changed)
+
+    def test_start_uses_latest_remote_main_without_changing_local_main(self):
+        writer = self.root / "writer"
+        self.run_git(self.root, "clone", str(self.remote), str(writer))
+        self.run_git(writer, "config", "user.name", "codex")
+        self.run_git(writer, "config", "user.email", "codex@local.invalid")
+        self.run_git(writer, "commit", "--allow-empty", "-m", "Advance remote main")
+        remote = self.tip(root=writer)
+        self.run_git(writer, "push", "origin", "main")
+        self.assertEqual(self.act("start", "codex/latest"), 0)
+        self.assertEqual(self.tip(), remote)
+        self.assertEqual(self.tip("origin/main"), remote)
+        self.assertEqual(self.tip("main"), self.base)
 
     def test_rejects_replacing_remote_history(self):
         self.assertEqual(self.act("start", "codex/example"), 0)
@@ -100,6 +163,7 @@ class GitWorkflowTests(unittest.TestCase):
         for action in ("start", "switch", "push", "merge"):
             self.assertEqual(self.act(action, "other/example"), 1)
         self.assertEqual(self.act("start", "codex/example"), 0)
+        self.assertEqual(self.act("merge", "other/example"), 1)
         before = self.tip()
         self.assertEqual(self.act("start", "codex/example"), 1)
         self.assertEqual(self.tip(), before)

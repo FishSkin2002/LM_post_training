@@ -1,5 +1,15 @@
 # 进展记录
 
+## 2026-10-26：通过 PR 合入主线
+
+- 用户要求从最新 main 更新合并规则：开发完成后代理可自主发起 PR，本地禁止合并到 main，其他允许操作的非 main 分支可直接合并。
+- 已通过受控入口获取远程，确认 main 与 origin/main 都为 d28258f，从该提交新建 `codex/pr-merge-workflow`，本轮仅更新 Git 协作规则和受控入口。
+- GitHub 插件访问仓库仍返回 404；正式网络授权后 GitHub CLI 已核对账号为 FishSkin2002，沿用已登录 CLI 交付 PR。
+- AGENTS 和 Git 约定已区分创建 PR、授权合并 PR、非 main 本地合并。受控入口拒绝本地向 main 合并或直接推送 main；非 main 合并不自动推送。
+- 新分支改为先获取远程 main，再从 origin/main 创建；本地 main 可保持原位，无须通过本地合并同步主线。
+- 12 项隔离仓库测试通过，覆盖 main 拒绝路径、codex/ 与其他无前缀目标分支的正常合并、main 合入功能分支、前缀限制和已有历史保护。
+- 新版受控入口已通过正式审批安装，逐字节核对与工作区源文件一致。未修改本地或远程 main，也未启动模型训练。
+
 ## 2026-10-26：准备 SFT Pull Request
 
 - 用户授权使用其 GitHub 账号和本地 codex Git 身份创建 PR，目标 main，仅准备合并，不执行 merge。
