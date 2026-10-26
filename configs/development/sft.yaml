@@ -1,0 +1,17 @@
+# 本机开发环境：8 GB 显存。仅显式选择此文件时使用。
+output_dir: outputs/development/gsm8k-sft
+num_train_epochs: 3
+learning_rate: 0.00002
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+optim: adafactor
+bf16: auto
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+logging_steps: 10
+logging_first_step: true
+save_strategy: epoch
+save_total_limit: 2
+report_to: none
+seed: 42

@@ -1,6 +1,6 @@
 # GSM8K SFT
 
-使用原始 GSM8K 题目和标准解答，对 Qwen3-0.6B 做全参数监督微调。沿用现有的 PyTorch、Transformers、Datasets 和 Accelerate，不需要新增训练依赖。
+使用原始 GSM8K 题目和标准解答，对 Qwen3-0.6B 做全参数监督微调。训练使用 PyTorch、Transformers、Datasets 和 Accelerate，配置通过 PyYAML 读取。
 
 ## 数据约定
 
@@ -11,11 +11,33 @@
 
 ## 训练
 
+配置集中放在 `configs/`：
+
+```text
+configs/
+├── common.yaml              # 两台机器共用的模型、数据和模板设置
+├── development/
+│   └── sft.yaml             # 本机开发环境（8 GB 显存）
+└── training/
+    └── sft.yaml             # 租用训练环境（32 GB 显存，默认）
+```
+
+修改对应 YAML 文件即可调整参数，无须改训练代码。未传 `--config` 时，程序始终读取训练机配置，不自动根据本机显存切换。
+
 在租用 GPU 上进入仓库目录，使用装有 `requirements.txt` 中依赖的 Python 环境运行：
 
 ```bash
 python train_sft.py
 ```
+
+显式选择训练机配置或开发机配置：
+
+```bash
+python train_sft.py --config configs/training/sft.yaml
+python train_sft.py --config configs/development/sft.yaml
+```
+
+开发机配置单独使用每批 1 条、梯度累积 16 次、Adafactor 和梯度检查点，输出到 `outputs/development/gsm8k-sft/`；训练机配置保持下面的 32 GB 设置。
 
 首次运行会下载模型和数据；已有完整缓存时，可在命令前加 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 离线运行。
 
@@ -23,7 +45,7 @@ python train_sft.py
 
 训练损失每 10 个优化器更新步骤显示一次。每轮保存检查点，保留最近两个；完整训练结束后，模型和分词器保存在 `outputs/gsm8k-sft/final/`，训练汇总保存在 `outputs/gsm8k-sft/train_results.json`。程序只使用训练集，不自动评测。
 
-常用参数为 `--epochs`、`--learning-rate`、`--batch-size`、`--gradient-accumulation-steps` 和 `--output-dir`。例如只训练一轮并使用新的输出目录：
+命令行中的 `--epochs`、`--learning-rate`、`--batch-size`、`--gradient-accumulation-steps` 和 `--output-dir` 可临时覆盖所选配置。例如只训练一轮并使用新的输出目录：
 
 ```bash
 python train_sft.py --epochs 1 --output-dir outputs/gsm8k-sft-1epoch
@@ -35,7 +57,7 @@ python train_sft.py --epochs 1 --output-dir outputs/gsm8k-sft-1epoch
 python train_sft.py --resume-from-checkpoint outputs/gsm8k-sft/checkpoint-STEP
 ```
 
-续训时保留原训练的学习率、轮数、批次和累积设置；如果初次使用了自定义 `--output-dir`，续训时也指定同一路径。
+续训时使用初次训练的配置文件及参数；如果初次使用了自定义 `--output-dir`，续训时也指定同一路径。开发机续训也需传入 `--config configs/development/sft.yaml`。
 
 ## 预览训练样本
 

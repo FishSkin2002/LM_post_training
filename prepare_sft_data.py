@@ -1,10 +1,15 @@
 """Build and inspect GSM8K SFT examples without loading model weights."""
 
+from pathlib import Path
+
+import yaml
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
 
-MODEL_NAME = "Qwen/Qwen3-0.6B"
+CONFIG_DIR = Path(__file__).resolve().parent / "configs"
+COMMON_CONFIG = yaml.safe_load((CONFIG_DIR / "common.yaml").read_text(encoding="utf-8"))
+MODEL_NAME = COMMON_CONFIG["model_name"]
 IGNORE_INDEX = -100
 
 
@@ -15,14 +20,14 @@ def build_sft_example(tokenizer, question: str, answer: str) -> dict[str, list[i
         messages,
         tokenize=True,
         add_generation_prompt=True,
-        enable_thinking=False,
+        enable_thinking=COMMON_CONFIG["enable_thinking"],
         return_dict=True,
     )
     encoded = tokenizer.apply_chat_template(
         messages + [{"role": "assistant", "content": answer}],
         tokenize=True,
         add_generation_prompt=False,
-        enable_thinking=False,
+        enable_thinking=COMMON_CONFIG["enable_thinking"],
         return_dict=True,
     )
     input_ids = encoded["input_ids"]
@@ -37,7 +42,7 @@ def build_sft_example(tokenizer, question: str, answer: str) -> dict[str, list[i
 
 
 def main():
-    dataset = load_dataset("openai/gsm8k", "main", split="train")
+    dataset = load_dataset(**COMMON_CONFIG["dataset"])
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     row = dataset[0]
     example = build_sft_example(tokenizer, row["question"], row["answer"])
