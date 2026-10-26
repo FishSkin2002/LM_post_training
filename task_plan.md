@@ -2,11 +2,11 @@
 
 ## 当前小步
 
-运行配置已统一收进 `configs/`，使用 YAML 分别存放共享设置、开发机和训练机的 SFT 配置。训练入口已适配，默认仍使用租用的 32 GB 显存训练机配置。
+GSM8K SFT 的 [Pull Request #1](https://github.com/FishSkin2002/qwen/pull/1) 已创建并附加至当前聊天，来源为 `codex/gsm8k-sft-data`，目标为 main。本轮不执行合并。
 
 用户已授权编写训练代码并明确自行训练。本轮完成脚本、运行说明和必要的代码验证；不启动真实 Qwen3-0.6B 的训练。
 
-本轮只整理配置与加载入口，不启动训练或新增实验。
+功能分支已推送；用户完成 GitHub CLI 登录后，已核对账号为 FishSkin2002 并用其创建 PR。所有本地提交继续使用 codex 身份。
 
 默认训练环境采用用户租用的 32 GB 显存 GPU；本机 8 GB 配置仅在显式选择时使用，具体环境事实见 findings.md。
 
@@ -22,10 +22,12 @@
 | 验证训练代码 | complete | 全部 7473 条原始解答保持一致；补齐掩码、随机微型模型损失与反向传播、保存加载通过。 |
 | 按机器整理配置 | complete | 共享、开发机、训练机 YAML 配置集中在 configs，入口默认训练机并支持显式选择。 |
 | 验证配置加载 | complete | 两套配置、命令行覆盖、科学计数法、异目录默认加载和无效 YAML 检查通过，未启动训练。 |
+| 核对身份与推送分支 | complete | 本地提交作者均为 codex，远端功能分支已存在，main 没有变更。 |
+| 创建 main 目标 PR | complete | 使用 FishSkin2002 创建 PR #1，目标 main，并已附加至当前聊天。 |
 
 ## 交付核查
 
-- 使用受控入口，从本地 main 新建 `codex/gsm8k-sft-data`，不合并或推送。
+- 用户已授权推送 `codex/gsm8k-sft-data` 并创建 main 目标 PR；功能分支已通过受控入口推送，不执行合并。
 - GSM8K 终端对照仍保留在 `codex/gsm8k-answer-preview`，未合并或推送。
 - 后续 Git 写操作遵守 docs/git-workflow.md；此前一次性历史重建授权已经结束。
 

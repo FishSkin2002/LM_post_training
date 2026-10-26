@@ -1,5 +1,12 @@
 # 进展记录
 
+## 2026-10-26：准备 SFT Pull Request
+
+- 用户授权使用其 GitHub 账号和本地 codex Git 身份创建 PR，目标 main，仅准备合并，不执行 merge。
+- 本地工作区干净，功能分支上的 4 个提交作者均为 `codex <codex@local.invalid>`；已通过受控入口推送，远端功能分支为 a91fba4，main 仍为 6b232f6。
+- GitHub 插件连接账号确认为 FishSkin2002，但访问本仓库返回 404，无法用该连接创建 PR。用户随后安装 GitHub CLI 2.103.2 并完成登录；已通过 CLI API 确认账号为 FishSkin2002。
+- 已创建 [PR #1](https://github.com/FishSkin2002/qwen/pull/1)，标题为 `Add GSM8K SFT training with per-machine YAML configs`，来源 `codex/gsm8k-sft-data`，目标 main；PR 已附加至当前聊天。未执行合并或真实训练。
+
 ## 2026-10-26：按机器分开保存配置
 
 - 用户要求开发机与训练机配置各放一个子目录，统一收进一个配置目录。
