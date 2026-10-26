@@ -1,10 +1,15 @@
 # 环境发现
 
-## 可用运行环境
+## 默认训练环境
+
+- 用户于 2026-10-26 明确：实际训练使用租用的 **32 GB 显存 GPU**，后续训练代码和默认配置均按这一环境准备，不再按本机 8 GB GPU 适配。GPU 型号和远端软件版本尚未提供，不作假定。
+- 本机环境只用于当前代码和数据验证，不能用本机显存容量替代上述训练环境。
+
+## 本机验证环境
 
 - 仓库为 `/home/yunli/code/qwen/codex`，远程 origin 为 `git@github.com:FishSkin2002/qwen.git`。
 - `/home/yunli/miniconda3/bin/python` 为 Python 3.12.15，已有 torch 2.6.0+cu124、transformers 5.20.2、datasets 5.1.0、accelerate 1.15.0。
-- 可用 GPU 为约 8 GB 显存的 NVIDIA RTX 4060；Codex 沙箱内访问 GPU 受限，需要正式宿主授权运行推理。
+- 本机 GPU 为约 8 GB 显存的 NVIDIA RTX 4060，仅作为本地环境记录；实际训练默认使用上述 32 GB 租用 GPU。Codex 沙箱内访问本机 GPU 受限，需要正式宿主授权。
 - Hugging Face 缓存已有 Qwen3-0.6B 和 GSM8K，可离线加载，已在此前真实运行中核实。
 
 ## GSM8K 的解答格式与计算器
@@ -26,10 +31,18 @@
 - 当前仓库 Python 文件没有接入计算器、工具调用或执行推理代码的控制流程；`main.py` 直接调用 `model.generate()`。已有终端对照分支也是直接生成。
 - 2026-10-26 在 `/home/yunli/miniconda3/bin/python` 核对安装包：torch 2.6.0+cu124、transformers 5.20.2、datasets 5.1.0、accelerate 1.15.0、trl 1.16.0、sympy 1.13.1；该解释器未安装 peft、vllm、qwen-agent 或 math-verify。包清单说明当前解释器的安装状态，不代表其他环境或整台机器。
 - 现有 Python 与 Transformers 已具备实现简单计算器控制循环的基础，但计算器接入仍需另写程序。SymPy 已安装不等于模型会自动调用它。
-- 训练目标采用原始 `answer`，不追加提示词或转换文本。本步只构造训练样本，不接入计算器推理循环。
+- 训练目标采用原始 `answer`，不追加提示词或转换文本；`train_sft.py` 直接复用样本构造，不接入计算器推理循环。
 - 当前 Transformers 的 `apply_chat_template()` 在本机返回 BatchEncoding；不能把返回对象本身当作 token 列表。代码显式设置 `return_dict=True` 并读取 `input_ids`。
 - 本机 Qwen3 模板将普通助手回答放在空 `<think>` 前缀之后。样本使用 `enable_thinking=False` 生成同样的提示前缀，并将整个前缀设为不计损失；原始解答及 `<|im_end|>` 参与监督。后续训练和推理沿用这一模板。
 - 已实际预览第一条训练样本，解题过程、两处计算器注释和最后的 `#### 72` 原样出现在监督文本中。
+
+## SFT 训练代码验证
+
+- 默认使用 Transformers Trainer 做全参数 SFT；面向用户指定的 32 GB 显存，采用 AdamW、每批 4 条和梯度累积 4 次，关闭梯度检查点。权重保持 FP32，GPU 支持时使用 BF16 混合精度。
+- 已离线核对全部 7473 条训练样本：监督部分解码后等于原始 `answer` 加对话结束标记，最长为 550 tokens。未截断、过滤或改写解答。
+- DataCollatorForSeq2Seq 在未传入编码器模型时可用于本脚本的动态补齐；实测保留已有题目掩码，并将补齐标签设为 `-100`，不产生 decoder 输入。
+- 使用 CPU 上的随机微型 Qwen3 验证 Trainer 集成：损失与手工移位后的交叉熵一致，反向传播梯度均有限，AdamW 初始化和保存/重新加载通过。这不验证实际 0.6B 模型在租用 GPU 上的运行显存；未启动真实训练。
+- 参考：[Transformers Trainer](https://huggingface.co/docs/transformers/main_classes/trainer)。接口与功能验证以本机固定版本为准。
 
 ## Git 权限核查
 
