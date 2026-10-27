@@ -1,5 +1,6 @@
 """Build and inspect GSM8K SFT examples without loading model weights."""
 
+import argparse
 from pathlib import Path
 
 import yaml
@@ -9,8 +10,17 @@ from transformers import AutoTokenizer
 
 CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 COMMON_CONFIG = yaml.safe_load((CONFIG_DIR / "common.yaml").read_text(encoding="utf-8"))
-MODEL_NAME = COMMON_CONFIG["model_name"]
 IGNORE_INDEX = -100
+
+
+def load_machine_config(config_path: Path) -> dict:
+    """Read model selection and training parameters from one machine YAML."""
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("Machine configuration must be a YAML mapping.")
+    if not isinstance(config.get("model_name"), str) or not config["model_name"].strip():
+        raise ValueError("Machine configuration must specify a nonempty model_name.")
+    return config
 
 
 def build_sft_example(tokenizer, question: str, answer: str) -> dict[str, list[int]]:
@@ -42,8 +52,19 @@ def build_sft_example(tokenizer, question: str, answer: str) -> dict[str, list[i
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config", type=Path, default=CONFIG_DIR / "development" / "sft.yaml",
+        help="Machine configuration YAML (default: configs/development/sft.yaml).",
+    )
+    args = parser.parse_args()
+    try:
+        config = load_machine_config(args.config)
+    except (OSError, yaml.YAMLError, ValueError) as error:
+        parser.error(f"Cannot read configuration: {error}")
+    print(f"Model: {config['model_name']} | Configuration: {args.config}", flush=True)
     dataset = load_dataset(**COMMON_CONFIG["dataset"])
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
     row = dataset[0]
     example = build_sft_example(tokenizer, row["question"], row["answer"])
     supervised_ids = [label for label in example["labels"] if label != IGNORE_INDEX]

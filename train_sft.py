@@ -1,4 +1,4 @@
-"""Fine-tune Qwen3-0.6B on the original GSM8K training answers."""
+"""Fine-tune the configured Qwen3 model on the original GSM8K training answers."""
 
 import argparse
 from pathlib import Path
@@ -15,7 +15,13 @@ from transformers import (
     set_seed,
 )
 
-from prepare_sft_data import COMMON_CONFIG, CONFIG_DIR, IGNORE_INDEX, MODEL_NAME, build_sft_example
+from prepare_sft_data import (
+    COMMON_CONFIG,
+    CONFIG_DIR,
+    IGNORE_INDEX,
+    build_sft_example,
+    load_machine_config,
+)
 
 
 def parse_args():
@@ -32,11 +38,10 @@ def parse_args():
     parser.add_argument("--resume-from-checkpoint")
     args = parser.parse_args()
     try:
-        config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as error:
+        config = load_machine_config(args.config)
+    except (OSError, yaml.YAMLError, ValueError) as error:
         parser.error(f"Cannot read configuration: {error}")
-    if not isinstance(config, dict):
-        parser.error("Training configuration must be a YAML mapping.")
+    args.model_name = config.pop("model_name")
     overrides = {
         "output_dir": args.output_dir,
         "num_train_epochs": args.epochs,
@@ -96,8 +101,9 @@ def main():
     args = parse_args()
     training_args = make_training_args(args)
     print(f"Training configuration: {args.config}", flush=True)
+    print(f"Model: {args.model_name}", flush=True)
     set_seed(training_args.seed)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     tokenizer.padding_side = COMMON_CONFIG["padding_side"]
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -109,7 +115,7 @@ def main():
     )
 
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+        args.model_name,
         dtype=getattr(torch, COMMON_CONFIG["model_dtype"]),
         attn_implementation=COMMON_CONFIG["attention_implementation"],
     )

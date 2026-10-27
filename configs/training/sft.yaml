@@ -1,12 +1,15 @@
 # 默认训练环境：租用的 32 GB 显存 GPU。
-output_dir: outputs/gsm8k-sft
+model_name: Qwen/Qwen3-1.7B
+output_dir: outputs/training/qwen3-1.7b-gsm8k-sft
 num_train_epochs: 3
 learning_rate: 0.00002
-per_device_train_batch_size: 4
-gradient_accumulation_steps: 4
-optim: adamw_torch
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+optim: adamw_torch_fused
 bf16: auto
-gradient_checkpointing: false
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
 logging_steps: 10
 logging_first_step: true
 save_strategy: epoch
