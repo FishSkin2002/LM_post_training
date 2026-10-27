@@ -1,4 +1,4 @@
-"""Fine-tune the configured Qwen3 model on the original GSM8K training answers."""
+"""Fine-tune Qwen3 on GSM8K reference reasoning and final results."""
 
 import argparse
 from pathlib import Path
@@ -30,7 +30,10 @@ def parse_args():
         "--config", type=Path, default=CONFIG_DIR / "training" / "sft.yaml",
         help="Training configuration YAML (default: configs/training/sft.yaml).",
     )
-    parser.add_argument("--output-dir")
+    parser.add_argument(
+        "--output-dir",
+        help="Run directory; new runs add -1, -2, ... on collision; resumes default to the checkpoint parent.",
+    )
     parser.add_argument("--epochs", type=float)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--batch-size", type=int)
@@ -50,6 +53,8 @@ def parse_args():
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
     }
     config.update({key: value for key, value in overrides.items() if value is not None})
+    if args.resume_from_checkpoint and args.output_dir is None:
+        config["output_dir"] = str(Path(args.resume_from_checkpoint).expanduser().resolve().parent)
     try:
         for key, value_type in {
             "num_train_epochs": float,
@@ -67,10 +72,24 @@ def parse_args():
         parser.error("Epochs, learning rate, batch size and accumulation steps must be positive.")
     args.training_config = config
     args.output_dir = config["output_dir"]
-    output_dir = Path(args.output_dir)
-    if output_dir.exists() and any(output_dir.iterdir()) and not args.resume_from_checkpoint:
-        parser.error("Output directory is not empty; choose a new directory or resume a checkpoint.")
     return args
+
+
+def reserve_output_dir(output_dir: str, *, resume: bool) -> str:
+    """Reserve a fresh run directory atomically, or keep an explicit resume path."""
+    base = Path(output_dir).expanduser().resolve()
+    if resume:
+        return str(base)
+    base.parent.mkdir(parents=True, exist_ok=True)
+    suffix = 0
+    while True:
+        candidate = base if suffix == 0 else base.with_name(f"{base.name}-{suffix}")
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            suffix += 1
+        else:
+            return str(candidate)
 
 
 def load_training_data(tokenizer):
@@ -99,9 +118,15 @@ def make_training_args(args):
 
 def main():
     args = parse_args()
+    args.output_dir = reserve_output_dir(
+        args.output_dir, resume=bool(args.resume_from_checkpoint),
+    )
+    args.training_config["output_dir"] = args.output_dir
     training_args = make_training_args(args)
     print(f"Training configuration: {args.config}", flush=True)
     print(f"Model: {args.model_name}", flush=True)
+    print(f"Output directory: {args.output_dir}", flush=True)
+    print(f"Thinking mode: {COMMON_CONFIG['enable_thinking']} | Loss: reasoning + final result", flush=True)
     print(
         f"Batch size: {training_args.per_device_train_batch_size} | "
         f"Gradient accumulation: {training_args.gradient_accumulation_steps} | "
