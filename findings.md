@@ -1,5 +1,12 @@
 # 环境发现
 
+## Qwen3 思考模式与损失范围
+
+- 用户于 2026-10-27 确定后续各规模 Qwen3 遵循官方思考模式最佳实践；长期约定见 [思考模式约定](docs/qwen3-thinking.md)。当前 Python/YAML 尚未适配该新约定。
+- Qwen 官方 ms-swift 指南中的 ignore_empty_think 指屏蔽空思考块，不是屏蔽非空推导。用户提出的非空思考段损失掩码尚未成为训练决定。
+- 已核对当前 Transformers 的因果语言模型损失：先构造完整 logits，再由交叉熵忽略 labels=-100 的位置；它没有将这些输入位置移出注意力上下文，也没有按标签掩码切断此前隐藏状态到最终输出的计算依赖。
+- 文档站训练页面无法访问，改用 QwenLM/Qwen3 官方仓库的 [ms-swift 训练说明](https://github.com/QwenLM/Qwen3/blob/main/docs/source/training/ms_swift.md) 交叉核对。
+
 ## 默认训练环境
 
 - 用户于 2026-10-27 确定长期模型默认：**训练机使用 Qwen3-1.7B，开发机使用 Qwen3-0.6B**。后续为某台机器准备训练或验证配置时沿用其默认；用户显式指定其他模型时使用指定值。可执行模型名称保存在对应机器的 YAML 中。
