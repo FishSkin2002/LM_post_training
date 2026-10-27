@@ -69,7 +69,10 @@ def validate_resume(checkpoint, training_mode, model_name, lora_options):
 def load_checkpoint_model(checkpoint, *, dtype, device, attention_implementation):
     """Load a local full model or local adapter plus its cached, matching base."""
     checkpoint = Path(checkpoint)
-    kwargs = {"dtype": dtype, "attn_implementation": attention_implementation, "local_files_only": True}
+    kwargs = {
+        "dtype": dtype, "attn_implementation": attention_implementation,
+        "local_files_only": True, "adapter_kwargs": {"local_files_only": True},
+    }
     if (checkpoint / "adapter_config.json").is_file():
         config = PeftConfig.from_pretrained(checkpoint, local_files_only=True)
         if not config.base_model_name_or_path:

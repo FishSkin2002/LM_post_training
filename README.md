@@ -185,6 +185,8 @@ python sample_checkpoint.py --model-name Qwen/Qwen3-0.6B
 python sample_checkpoint.py --model-name Qwen/Qwen3-4B --local-files-only
 ```
 
+模型名需包含完整仓库命名空间，例如 `Qwen/Qwen3-4B`；仅写 `Qwen3-4B` 不会匹配对应仓库或缓存，除非当前目录确实有这个名称的本地模型目录。仅缓存标志同时传入模型加载和自动适配器探测；模型缓存缺失时会报错，不会改为联网下载。
+
 原始模型默认报告名为 `outputs/samples/original-Qwen--Qwen3-4B-test-seed42.md`，与 checkpoint 报告分开。保持相同的 --split、--seed、--num-samples 和 --max-new-tokens，可在同一模型规模下观察微调前后的回答；生成种子在模型加载后设置，使加载过程不影响生成随机状态。少量抽样不代替完整评测。
 
 例如查看当前下载的 0.6B checkpoint：

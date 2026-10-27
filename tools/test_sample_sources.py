@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerFast, Qwen3Config, Qwen3ForCausalLM
+from transformers.models.auto import auto_factory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sample_checkpoint
@@ -130,6 +132,42 @@ class SampleSourceTests(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
                 sample_checkpoint.parse_args()
             self.assertEqual(error.exception.code, 2)
+
+    def test_cache_only_reaches_real_transformers_adapter_probe(self):
+        class ProbeReached(Exception):
+            pass
+
+        def inspect_probe(source, **kwargs):
+            self.assertEqual(source, self.model_name)
+            self.assertTrue(kwargs.get("local_files_only", False), "Adapter probe lost the cache-only flag.")
+            raise ProbeReached
+
+        revision = ResolvedRevision(self.resolved_revision, initial="main")
+        adapter_config = self.adapter / "adapter_config.json"
+        config = json.loads(adapter_config.read_text())
+        config["base_model_name_or_path"] = self.model_name
+        adapter_config.write_text(json.dumps(config))
+        for source in (["--model-name", self.model_name, "--local-files-only"],
+                       ["--checkpoint", str(self.adapter)]):
+            with self.subTest(source=source), \
+                    patch.object(sys, "argv", ["sample_checkpoint.py", "--device", "cpu", "--num-samples", "1", *source]), \
+                    patch.object(sample_checkpoint, "load_dataset", return_value=self.rows), \
+                    patch.object(sample_checkpoint, "resolve_revision", return_value=revision), \
+                    patch.object(auto_factory, "resolve_revision", return_value=revision), \
+                    patch.object(auto_factory, "find_adapter_config_file", side_effect=inspect_probe), \
+                    self.assertRaises(ProbeReached):
+                sample_checkpoint.main()
+
+    def test_short_qwen_name_hint_preserves_existing_local_directories(self):
+        for name in ("Qwen3-0.6B", "Qwen3-1.7B", "Qwen3-4B", "Qwen3-8B"):
+            with self.subTest(name=name), patch.object(sys, "argv", ["sample_checkpoint.py", "--model-name", name]), \
+                    contextlib.redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit):
+                sample_checkpoint.parse_args()
+            self.assertIn(f"Qwen/{name}", error.getvalue())
+        (self.root / "Qwen3-4B").mkdir()
+        with contextlib.chdir(self.root), patch.object(sys, "argv", ["sample_checkpoint.py", "--model-name", "Qwen3-4B"]):
+            args, _ = sample_checkpoint.parse_args()
+        self.assertEqual(args.model_name, "Qwen3-4B")
 
 
 if __name__ == "__main__":
