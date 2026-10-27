@@ -1,6 +1,6 @@
 # GSM8K SFT
 
-使用 GSM8K 题目和标准解答，对 Qwen3 做思考模式全参数监督微调。训练机默认使用 Qwen3-1.7B，开发机默认使用 Qwen3-0.6B。训练使用 PyTorch、Transformers、Datasets 和 Accelerate，配置通过 PyYAML 读取。
+使用 GSM8K 题目和标准解答，对 Qwen3 做思考模式 LoRA 监督微调。开发机（8 GB）默认 Qwen3-0.6B，训练机（32 GB）默认 Qwen3-4B，可选 Qwen3-8B。PEFT 负责适配器，Transformers Trainer 负责训练，保留全参数训练选项。
 
 ## 数据约定
 
@@ -21,74 +21,80 @@
 
 ## 训练
 
-配置集中放在 `configs/`：
+先在运行训练所用的 Python 环境中安装依赖：
 
-```text
-configs/
-├── common.yaml              # 两台机器共用的精度、数据和模板设置
-├── development/
-│   └── sft.yaml             # Qwen3-0.6B，本机开发环境（8 GB 显存）
-└── training/
-    └── sft.yaml             # Qwen3-1.7B，租用训练环境（32 GB 显存，默认）
+```bash
+python -m pip install -r requirements.txt
 ```
 
-修改对应 YAML 文件即可调整模型和训练参数，无须改训练代码。未传 `--config` 时，训练程序始终读取训练机配置，不自动根据本机显存切换。后续按机器准备配置的约定见 [默认训练环境](findings.md#默认训练环境)。
+| 配置文件 | 模型 | 环境 |
+| --- | --- | --- |
+| `configs/development/sft.yaml` | Qwen3-0.6B | 8 GB 开发机 |
+| `configs/training/sft.yaml` | Qwen3-4B | 32 GB 训练机，默认 |
+| `configs/training/sft-8b.yaml` | Qwen3-8B | 32 GB 训练机，可选，先短测 |
 
-在租用 GPU 上进入仓库目录，使用装有 `requirements.txt` 中依赖的 Python 环境运行：
+`configs/common.yaml` 存放数据、思考模板和生成设置，以及全参数模式的加载精度。未传 `--config` 时始终使用训练机配置，不根据本机显存切换。模型名称与训练方式以所选 YAML 为准；环境约定见 [默认训练环境](findings.md#默认训练环境)。
+
+在对应机器上运行：
 
 ```bash
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-python train_sft.py
-```
-
-显式选择训练机配置或开发机配置：
-
-```bash
 python train_sft.py --config configs/training/sft.yaml
 python train_sft.py --config configs/development/sft.yaml
+# 可选 8B：
+python train_sft.py --config configs/training/sft-8b.yaml
 ```
 
-开发机配置单独使用每批 1 条、梯度累积 16 次、Adafactor 和梯度检查点，输出到 `outputs/development/gsm8k-sft/`；训练机配置保持下面的 32 GB 设置。
+三套配置均默认 LoRA：在注意力的 q/k/v/o 和 MLP 的 gate/up/down 线性层添加适配器，`r=16`、`lora_alpha=32`、`lora_dropout=0.05`，学习率 `1e-4`，每批 1 条、累积 16 次、训练 3 轮。冻结 embedding、输出层及其他底座参数，只训练适配器；思考与最终结果仍共同监督。这些是起始实验参数，未通过答案正确率评测证明优劣。
 
-首次运行会下载模型和数据；已有完整缓存时，可在命令前加 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 离线运行。
+CUDA 支持 BF16 时，LoRA 底座以 BF16 存储并使用 BF16 混合精度；否则使用 FP16 底座与 FP16 混合精度。适配器参数、梯度和 Adam 状态保持 FP32，CPU 验证采用 FP32。大型模型不静默退回 FP32 底座。三套配置保留 SDPA、非重入梯度检查点，训练时关闭 KV cache，使用融合 AdamW。启动日志显示模式、实际权重精度、批量、累积及混合精度开关。
 
-训练配置面向用户租用的 **32 GB 显存 GPU**。默认训练 3 轮，学习率 `2e-5`，每批 1 条、梯度累积 16 次，单卡有效批量为 16 条。1.7B 模型的权重、梯度和 AdamW 状态占用更多显存，因此启用非重入梯度检查点，并使用融合 AdamW，避免默认 foreach 实现额外的整组参数中间量。CUDA 支持 BF16 时自动使用 BF16 混合精度，模型权重保持 FP32。启动时会打印实际批量、累积次数、BF16 和梯度检查点开关，便于核对机器环境。
-
-AutoDL 的 NVIDIA vGPU-32GB 实测显示此前每批 2 条会在反向传播时显存不足，因此将微批量降为 1，并增加累积次数。上面的分配器环境变量用于缓解变长样本带来的显存碎片，需在启动 Python 前设置。新配置的峰值显存仍需在训练机上实测。
-
-训练损失每 10 个优化器更新步骤显示一次。每轮保存检查点，保留最近两个；完整训练结束后，模型和分词器保存在实际运行目录的 `final/`，训练汇总保存在同一目录下的 `train_results.json`。训练机默认基础目录为 `/root/autodl-tmp/outputs/training/qwen3-1.7b-gsm8k-sft`，保留 AutoDL 数据盘位置。程序只使用训练集，不自动评测。
-
-命令行中的 `--epochs`、`--learning-rate`、`--batch-size`、`--gradient-accumulation-steps` 和 `--output-dir` 可临时覆盖所选配置。例如只训练一轮并使用新的输出目录：
+`--epochs`、`--learning-rate`、`--batch-size`、`--gradient-accumulation-steps`、`--max-steps` 和 `--output-dir` 可临时覆盖配置。保留全参数模式，例如在资源足够的机器上运行：
 
 ```bash
-python train_sft.py --epochs 1 --output-dir outputs/training/qwen3-1.7b-gsm8k-sft-1epoch
+python train_sft.py --training-mode full --learning-rate 0.00002 \
+  --output-dir /root/autodl-tmp/outputs/training/qwen3-4b-gsm8k-full
 ```
 
-每次新训练会创建独立目录；基础目录已存在时，在末尾依次尝试 `-1`、`-2` 等数字后缀，选择第一个不存在的目录。空目录和同名文件也会避开。`--output-dir` 指定的目录同样遵循此规则，启动时打印最终路径，旧结果保留。例如：
+全参数模式按 common.yaml 的 FP32 精度加载全部权重，显存预算与 LoRA 不同；这个命令不代表 4B 全参数训练适合 32 GB。切换模式时学习率仍由配置或命令行决定，不会自动重新调参。
 
-```text
-qwen3-1.7b-gsm8k-sft/
-qwen3-1.7b-gsm8k-sft-1/
-qwen3-1.7b-gsm8k-sft-2/
-```
+首次训练会下载模型和数据；已有完整缓存时可加 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1`。程序只使用训练集，不自动评测。分配器选项用于缓解变长样本的显存碎片，不能替代对真实峰值的检查。
 
-中断后可以指定现有检查点恢复训练；续训默认使用该 checkpoint 的父目录，不加后缀。将下面的路径替换为启动日志中实际目录下的 checkpoint：
+## 最长样本显存短测
 
-```bash
-python train_sft.py --resume-from-checkpoint /root/autodl-tmp/outputs/training/qwen3-1.7b-gsm8k-sft-1/checkpoint-STEP
-```
-
-续训时使用初次训练的模型、配置文件及参数；显式传入的 `--output-dir` 优先于 checkpoint 父目录，按指定路径续训。开发机续训也需传入 `--config configs/development/sft.yaml`。此前非思考样本训练的 checkpoint 保留原状；新的思考格式训练作为独立实验开始。
-
-若沿用旧配置运行后 OOM，可直接用命令行覆盖重试，并使用新目录保留失败日志：
+在 32 GB 训练机先运行以下命令；8B 使用对应的配置文件替换。短测重复分词后最长的真实训练样本，每次更新仍完成配置中的全部梯度累积，默认更新 2 次并在每次更新后保存 checkpoint。短测是显存与保存恢复检查，重复单题的损失不能作为效果结论。
 
 ```bash
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python train_sft.py \
-  --batch-size 1 --gradient-accumulation-steps 16 \
-  --output-dir outputs/training/qwen3-1.7b-gsm8k-sft-bs1
+  --config configs/training/sft.yaml --memory-smoke-test \
+  --output-dir /root/autodl-tmp/outputs/training/qwen3-4b-lora-smoke
 ```
 
-按当前每轮保存策略，第一轮结束前失败的训练尚未产生检查点，需从头重试。新训练会自动避开已有目录；从实际存在的检查点恢复时才使用 `--resume-from-checkpoint`。
+短测结束检查实际运行目录中的 `memory_results.json`：记录模型、底座精度、批量、累积次数、可训练参数、最长样本长度，以及 CUDA 的 `peak_allocated_gib`、`peak_reserved_gib` 和总显存。峰值包括训练中的更新与 checkpoint 保存；不包含其他进程的占用，也不代表全部显存都可用。CPU 验证不写 GPU 峰值。该报告用于正式训练的初步检查，成功短测不保证长时间训练、长文本生成或 GRPO 的显存用量。
+
+再从该次运行的 `checkpoint-1` 恢复到第 2 次更新，显式放到另一个目录，检查优化器与随机状态恢复。路径替换为启动日志打印的实际目录，冲突时可能带数字后缀：
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python train_sft.py \
+  --config configs/training/sft.yaml --memory-smoke-test --max-steps 2 \
+  --resume-from-checkpoint /root/autodl-tmp/outputs/training/qwen3-4b-lora-smoke/checkpoint-1 \
+  --output-dir /root/autodl-tmp/outputs/training/qwen3-4b-lora-smoke-resume
+```
+
+确认没有 OOM、损失及梯度范数有限、显存仍有余量后，再使用不带 `--memory-smoke-test` 的普通训练命令。开发机可用其配置进行同样的检查。真实 4B / 8B 峰值由训练机实测，本机微型模型测试不能代替。
+
+## 保存与续训
+
+正常训练每轮保存 checkpoint，保留最近两个；结束时在实际运行目录的 `final/` 保存模型产物和分词器，并保存 `train_results.json`、`trainer_state.json` 与 `memory_results.json`。默认输出路径见对应 YAML。新训练通过数字后缀避开已有目录、空目录和同名文件；启动时打印最终路径，旧结果保留。
+
+LoRA 的 `final/` 保存 `adapter_model.safetensors`、`adapter_config.json` 和分词器，适配器配置记录对应底座及远程 revision；没有重复保存完整底座权重。每个训练 checkpoint 还包含优化器、调度器和随机状态等续训文件。`final/` 用于推理，续训使用完整的 `checkpoint-STEP/`。全参数模式继续保存完整模型。
+
+```bash
+python train_sft.py --config configs/training/sft.yaml \
+  --resume-from-checkpoint /root/autodl-tmp/outputs/training/qwen3-4b-gsm8k-lora/checkpoint-STEP
+```
+
+续训使用相同模型、LoRA 参数和训练设置；短测续训也要带 `--memory-smoke-test`。默认沿用 checkpoint 父目录，显式 `--output-dir` 优先。全参数与 LoRA 的优化器状态不混用；0.6B、4B、8B 的适配器也不通用。原有 checkpoint 保留，新 LoRA 实验从对应官方底座开始，不续接旧全参数优化器状态。
 
 ## TensorBoard 训练指标
 
@@ -162,7 +168,7 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /home/yunli/miniconda3/bin/python prepare
 
 ## 抽题查看 checkpoint 的回答
 
-下载好的 checkpoint 可以直接加载。默认从 GSM8K **test** 固定抽取 5 道不同题目，启用思考模式，将问题、模型思考、最终输出和数据集原始参考解答保存到 Markdown 文件。没有生成 `</think>` 时保留整段生成内容并标明尚未识别最终输出。终端仅提示保存位置。例如查看当前下载的 0.6B checkpoint：
+抽样入口同时支持本地完整模型和 LoRA 适配器目录。默认从 GSM8K **test** 固定抽取 5 道不同题目，启用思考模式，将问题、模型思考、最终输出和数据集原始参考解答保存到 Markdown 文件。没有生成 `</think>` 时保留整段生成内容并标明尚未识别最终输出。终端仅提示保存位置。例如查看当前下载的 0.6B checkpoint：
 
 ```bash
 python sample_checkpoint.py \
@@ -172,7 +178,16 @@ python sample_checkpoint.py \
 
 这条命令默认保存到项目内的 `outputs/samples/checkpoint-1404-test-seed42.md`；重复运行会更新同名报告。使用 `--output 路径.md` 可以自定义保存位置。
 
-模型和分词器均从 `--checkpoint` 本地目录加载。该目录需要包含模型配置、权重和分词器文件；单独的 `chat_template.jinja` 也需一起保留。推理会启用缓存并关闭梯度，不加载优化器状态。
+分词器始终从 `--checkpoint` 本地目录加载，单独的 `chat_template.jinja` 也需一起保留。完整模型目录包含 `config.json` 和权重；LoRA 目录包含 `adapter_config.json` 和适配器权重，程序会另外从本地路径或 Hugging Face 缓存加载配置中记录的同一底座及 revision。所有模型加载均保持 `local_files_only=True`，底座缓存缺失时先在该机器准备对应版本的底座。推理启用缓存并关闭梯度，不加载优化器状态。
+
+例如，在已有对应底座缓存的训练机上查看 LoRA 的最终产物：
+
+```bash
+python sample_checkpoint.py \
+  --checkpoint /root/autodl-tmp/outputs/training/qwen3-4b-gsm8k-lora/final
+```
+
+适配器文件小不等于推理模型小。4B / 8B 的 BF16 底座不适合当前 8 GB 开发机直接加载，先在训练机抽样并下载 Markdown 报告；本轮不加入量化推理或完整模型合并导出。
 
 数据集已有缓存时，可在命令前加 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 离线运行。默认自动选择 CUDA，按设备能力使用 BF16 或 FP16；没有 CUDA 时使用 CPU/FP32，也可用 `--device cpu` 显式选择。
 
@@ -184,7 +199,10 @@ python sample_checkpoint.py \
 
 - [GSM8K 数据格式与计算器说明](https://github.com/openai/grade-school-math#dataset-details)
 - [Qwen3-0.6B 对话模板与模式说明](https://huggingface.co/Qwen/Qwen3-0.6B)
-- [Qwen3-1.7B 对话模板与模式说明](https://huggingface.co/Qwen/Qwen3-1.7B)
+- [Qwen3-4B 对话模板与模式说明](https://huggingface.co/Qwen/Qwen3-4B)
+- [Qwen3-8B 对话模板与模式说明](https://huggingface.co/Qwen/Qwen3-8B)
+- [PEFT LoRA](https://huggingface.co/docs/peft/developer_guides/lora)
+- [PEFT 保存格式](https://huggingface.co/docs/peft/developer_guides/checkpoint)
 - [Transformers Trainer](https://huggingface.co/docs/transformers/main_classes/trainer)
 - [Transformers TensorBoard 回调](https://huggingface.co/docs/transformers/main_classes/callback#transformers.integrations.TensorBoardCallback)
 - [TensorBoard 查看日志](https://www.tensorflow.org/tensorboard/get_started)

@@ -1,3 +1,4 @@
+# Full training precision; LoRA selects BF16/FP16 storage on CUDA.
 model_dtype: float32
 attention_implementation: sdpa
 dataset:
