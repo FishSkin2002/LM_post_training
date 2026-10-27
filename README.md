@@ -142,6 +142,26 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /home/yunli/miniconda3/bin/python prepare
 
 保留计算器注释只提供训练文本，不会自动执行计算。
 
+## 抽题查看 checkpoint 的回答
+
+下载好的 checkpoint 可以直接加载。默认从 GSM8K **test** 固定抽取 5 道不同题目，使用训练时相同的非思考前缀，将问题、模型回答和数据集参考解答保存到 Markdown 文件。终端仅提示保存位置。例如查看当前下载的 0.6B checkpoint：
+
+```bash
+python sample_checkpoint.py \
+  --checkpoint outputs/development/gsm8k-sft/checkpoint-1404 \
+  --num-samples 5
+```
+
+这条命令默认保存到项目内的 `outputs/samples/checkpoint-1404-test-seed42.md`；重复运行会更新同名报告。使用 `--output 路径.md` 可以自定义保存位置。
+
+模型和分词器均从 `--checkpoint` 本地目录加载。该目录需要包含模型配置、权重和分词器文件；单独的 `chat_template.jinja` 也需一起保留。推理会启用缓存并关闭梯度，不加载优化器状态。
+
+数据集已有缓存时，可在命令前加 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 离线运行。默认自动选择 CUDA，按设备能力使用 BF16 或 FP16；没有 CUDA 时使用 CPU/FP32，也可用 `--device cpu` 显式选择。
+
+`--split train` 可查看训练集题目，`--seed` 控制抽取哪些题；默认每一步选择概率最高的词元生成回答。`--max-new-tokens` 默认为 512，触及长度上限且未生成结束标记时会在报告中提示回答可能未结束。
+
+只将原始问题输入模型，参考解答用于事后对照。少量样本用于观察回答格式和解题过程，完整答案正确率仍需另行评测。
+
 ## 来源
 
 - [GSM8K 数据格式与计算器说明](https://github.com/openai/grade-school-math#dataset-details)

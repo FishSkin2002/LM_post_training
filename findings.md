@@ -17,6 +17,14 @@
 - 本机 GPU 为约 8 GB 显存的 NVIDIA RTX 4060，仅作为本地环境记录；实际训练默认使用上述 32 GB 租用 GPU。Codex 沙箱内访问本机 GPU 受限，需要正式宿主授权。
 - Hugging Face 缓存已有 Qwen3-0.6B 和 GSM8K，可离线加载，已在此前真实运行中核实。
 
+## 当前训练结果与推理输入
+
+- 用户于 2026-10-27 在第二次 1.7B OOM 后，将当前实验改为 0.6B 并完成新训练；现提供下载后的 `outputs/development/gsm8k-sft/checkpoint-1404` 供本机抽样问答。推理使用该 checkpoint 的模型和分词器，不从训练机 YAML 的模型默认值加载起始模型。
+- 该目录 config.json 的 hidden_size=1024、num_hidden_layers=28、vocab_size=151936、dtype=float32；model.safetensors 大小 2384234968 字节。分词器的聊天模板单独保存在 chat_template.jinja，tokenizer_config.json 内没有内联 chat_template 字段并不表示模板缺失。
+- 样本观察默认使用 GSM8K test，固定种子抽取 5 道不同题目，沿用训练中的非思考模板。原始题目作为唯一用户输入，数据集参考解答在模型生成后展示。此用途是定性查看回答，不记录少量样本为完整答案正确率。
+- 已在本机用 CUDA/BF16 离线加载该 checkpoint，对 test 索引 `[1309, 228, 51, 563, 501]` 生成原始问答报告，均正常生成结束标记。用户要求自行查看答案，报告只保留问题、模型回答和数据集参考解答，不加入人工判分或点评。
+- 用户随后要求问答仅保存到文件，终端不展示问答。抽样入口默认保存到项目 `outputs/samples/<checkpoint目录名>-<split>-seed<seed>.md`，可用 --output 指定其他路径；同名报告更新。常规加载进度和问答正文不输出到终端，完成时仅提示保存路径。
+
 ## GSM8K 的解答格式与计算器
 
 - 官方说明：`answer` 包含自然语言解题过程，最后一行的最终数值前有 `####`。这一标记用于提取答案，无须转成自然语言才能训练。
