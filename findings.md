@@ -1,5 +1,25 @@
 # 环境发现
 
+## GSM8K 公开实现核查
+
+- 2026-10-27 研究范围为代表性一手实现，不据此声称所有项目都采用同一方案。
+- [GSM8K 原论文](https://arxiv.org/pdf/2110.14168)附录 E、图 12 展示的联合训练目标中，语言模型目标屏蔽问题词元、监督完整 solution；该 solution 包括推导和最终答案。此处是附录的目标说明，不将其混同于 GRPO 或仅最终答案交叉熵。
+- [MetaMath train_math.py](https://github.com/meta-math/MetaMath/blob/main/train_math.py)：targets 使用完整 output/response 加 EOS；preprocess 只将 source 前缀 labels 设为 -100，collator 将 padding 设为 -100。未找到针对 response 内推导段的单独损失屏蔽。
+- [HuggingFaceTB 的 Qwen3/GSM8K 数据脚本](https://huggingface.co/HuggingFaceTB/qwen3-1.7b-gsm8k-sft/blob/main/scripts/prepare_combined_data.py)：移除原解答中的计算器注释和末尾 #### 行，将步骤放进非空 think 块，最终答案另放在块外；还混入 MetaMathQA 的 GSM 衍生样本。这是社区公开示例，不是 Qwen 官方配方。
+- 对应 [train_improved.py](https://huggingface.co/HuggingFaceTB/qwen3-1.7b-gsm8k-sft/blob/main/scripts/train_improved.py) 和 train_continued.py 将包含完整 assistant 内容的 messages 数据交给 SFTTrainer，没有设置非空思考段排除项，也没有显式开启 assistant_only_loss。依照 [TRL 文档](https://huggingface.co/docs/trl/sft_trainer)的语言建模数据默认行为推断，思考段保留为监督目标；默认甚至包含问题部分，不能笼统说所有框架都默认屏蔽题目。历史实际依赖版本未在这两份脚本中锁定，不能声称已复现其逐词元标签。
+- [verl GSM8K 数据处理](https://github.com/verl-project/verl/blob/main/examples/data_preprocess/gsm8k.py)：从原始 answer 的 #### 后提取最终数值供 reward_model.ground_truth 使用，题目附带逐步推导要求；[奖励函数](https://github.com/verl-project/verl/blob/main/verl/utils/reward_score/gsm8k.py) 按最终数值匹配打分。
+- 已继续追踪 verl 单轮路径：[ray_trainer.compute_response_mask](https://github.com/verl-project/verl/blob/main/verl/trainer/ppo/ray_trainer.py) 从响应位置的注意力掩码构建 response_mask；[core_algos.compute_grpo_outcome_advantage](https://github.com/verl-project/verl/blob/main/verl/trainer/ppo/core_algos.py) 将结果优势广播到 response_mask，策略损失也按该 mask 聚合。因此如果响应包含思考词元，它们同样参与策略训练，不能解释为只训练最后答案词元。
+- [ms-swift 默认 SFT 损失](https://github.com/modelscope/ms-swift/blob/main/docs/source_en/Instruction/Command-line-parameters.md)：assistant 响应计算交叉熵，默认不监督用户/系统部分；ignore_empty_think 只去掉空块，ignore_think_prefix 只去掉开头标记，后续推导和闭合标记仍计算损失。这是 Qwen 官方推荐框架的通用机制，并非 GSM8K 专属实验结果。
+- 核查结论：上述普通/显式思考 SFT 都支持完整推导作为训练目标，未找到整段非空思考默认屏蔽的设置；结果奖励 RL 则只核对最终数值，但通常更新完整生成响应。不能把“只按最终答案打分”解释成“只对最终答案词元训练”。
+- 对本项目的建议是以“推导与最终输出都监督，问题与 padding 屏蔽”作为思考 SFT 的基线；这是基于实现的建议，不是已经选定或验证效果的实验决定。本轮未改代码或运行配置。
+
+## Qwen3 思考模式与损失范围
+
+- 用户于 2026-10-27 确定后续各规模 Qwen3 遵循官方思考模式最佳实践；长期约定见 [思考模式约定](docs/qwen3-thinking.md)。当前 Python/YAML 尚未适配该新约定。
+- Qwen 官方 ms-swift 指南中的 ignore_empty_think 指屏蔽空思考块，不是屏蔽非空推导。用户提出的非空思考段损失掩码尚未成为训练决定。
+- 已核对当前 Transformers 的因果语言模型损失：先构造完整 logits，再由交叉熵忽略 labels=-100 的位置；它没有将这些输入位置移出注意力上下文，也没有按标签掩码切断此前隐藏状态到最终输出的计算依赖。
+- 文档站训练页面无法访问，改用 QwenLM/Qwen3 官方仓库的 [ms-swift 训练说明](https://github.com/QwenLM/Qwen3/blob/main/docs/source/training/ms_swift.md) 交叉核对。
+
 ## 默认训练环境
 
 - 用户于 2026-10-27 确定长期模型默认：**训练机使用 Qwen3-1.7B，开发机使用 Qwen3-0.6B**。后续为某台机器准备训练或验证配置时沿用其默认；用户显式指定其他模型时使用指定值。可执行模型名称保存在对应机器的 YAML 中。
