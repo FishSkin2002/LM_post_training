@@ -11,11 +11,13 @@
 | 核实配置与环境 | complete | 已确认 Trainer 内置 TensorBoard 回调、本机依赖版本及日志路径；PR #3 已合并，从最新 origin/main（90348df）创建 codex/tensorboard-sft-metrics。 |
 | 启用日志与说明 | complete | 两套配置启用内置 TensorBoard 回调，固定依赖 2.21.0；README 包含 8 项主要指标、日志位置和本机/远端查看命令。 |
 | 验证事件文件 | complete | 两套配置各完成 CPU 随机微型 Qwen3 的 11 次更新；真实事件文件读回 8 项有限值指标，曲线步数为 1、10，结束汇总为 11；输出目录隔离通过。 |
-| 交付 PR | pending | 正常提交、推送并创建 main 目标 PR，附加到当前聊天；本轮不合并。 |
+| 交付 PR | complete | 功能提交已正常推送，main 目标 PR #4 已创建并附加到当前聊天；本轮不合并。 |
 
 ## 交付
 
 本轮交付 TensorBoard 训练日志及直接配套文档。保持现有模型、数据和训练超参数；首步及每 10 次优化器更新记录训练曲线，结束时记录 Trainer 汇总指标。
+
+[PR #4](https://github.com/FishSkin2002/qwen/pull/4) 已创建。本轮完成；下次实际训练会自动记录，后续训练机短跑等待用户继续。
 
 ## 边界
 
