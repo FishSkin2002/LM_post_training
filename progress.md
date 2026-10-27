@@ -8,6 +8,7 @@
 - 已用实际 AutoModel 调用路径复现失败：适配器探测收到的 local_files_only 默认为 False，新增回归明确报 Adapter probe lost the cache-only flag；没有发起实际网络请求或加载预训练权重。
 - 已将标志显式传入原始模型和 LoRA 底座加载的 adapter_kwargs，并为常用缺少 Qwen/ 的模型名提供明确提示，保留同名本地目录用法；开始验证修复后的原始/完整/LoRA 路径。
 - 五组抽样测试通过，新增回归进入真实 Transformers AutoModel 适配器探测，并覆盖原始模型及 LoRA 底座两条路径；缺少命名空间的四个常用模型名和同名本地目录均已验证。四组既有 CPU 集成回归、编译与差异检查通过；可选 CUDA 测试未重跑，未加载真实预训练权重或实际联网请求。
+- 修复提交 `d7bb775` 已正常推送，[PR #13](https://github.com/FishSkin2002/qwen/pull/13) 已创建并附加，未合并。本轮修复完成；用户现在即可用完整仓库名重试，更新修复后仅缓存选项会传到适配器探测。
 ## 2026-10-28：支持原始 Qwen3 抽样
 
 - 用户要求 sample_checkpoint.py 同样支持微调前的原始 Qwen3。新增 --model-name 与 --checkpoint 互斥选择，沿用既定思考采样设置、抽题种子与报告输出，保持训练代码和已有产物不变。
