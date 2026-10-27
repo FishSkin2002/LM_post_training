@@ -2,6 +2,18 @@
 
 ## 当前小步
 
+修复原始模型抽样的仅缓存路径：补全缺少 Qwen/ 时的明确提示，并将仅缓存标志传入 Transformers 的适配器探测；保留正确模型名下的现有抽样行为，完成回归并交付 PR。
+
+## 抽样加载修复
+
+| 阶段 | 状态 | 完成条件 |
+| --- | --- | --- |
+| 核对故障与分支 | complete | 用户日志缺少 Qwen/；本机固定版本 AutoModel 的适配器探测没有继承顶层 local_files_only。PR #12 已合并，从最新 origin/main 创建 codex/fix-original-model-offline。 |
+| 复现与修复 | complete | 真实 AutoModel 适配器探测回归在修复前失败、修复后通过；原始模型与 LoRA 底座均显式传入缓存标志，缺少命名空间时给出提示，同名本地目录保持可用。 |
+| 验证与交付 | in_progress | 五组抽样测试和四组既有 CPU 集成回归通过，编译/差异检查通过；准备提交 PR，不运行预训练权重或真实问答。 |
+
+## 上一小步：原始模型抽样入口
+
 为 sample_checkpoint.py 增加训练前原始 Qwen3 的抽样入口；用 --model-name 选择起始模型，保留 --checkpoint、相同抽题/生成设置与文件报告，完成离线验证并交付 PR。
 
 ## 原始模型抽样

@@ -50,6 +50,8 @@ def parse_args():
         args.model_name = args.model_name.strip()
         if not args.model_name:
             parser.error("--model-name must be nonempty.")
+        if re.fullmatch(r"Qwen3-(?:0\.6|1\.7|4|8)B", args.model_name) and not Path(args.model_name).is_dir():
+            parser.error(f"Use the full model repository ID: Qwen/{args.model_name} (or an existing local model directory).")
         source_name = "original-" + re.sub(r"[^A-Za-z0-9._-]+", "--", args.model_name).strip(".-")
     if args.num_samples <= 0 or args.max_new_tokens <= 0:
         parser.error("Sample count and max-new-tokens must be positive.")
@@ -127,6 +129,7 @@ def main():
         revision = getattr(resolved, "resolved", resolved)
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name, revision=revision, local_files_only=args.local_files_only,
+            adapter_kwargs={"local_files_only": args.local_files_only},
             dtype=dtype, attn_implementation=COMMON_CONFIG["attention_implementation"],
         ).to(device)
         tokenizer = AutoTokenizer.from_pretrained(

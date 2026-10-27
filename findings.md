@@ -1,5 +1,11 @@
 # 环境发现
 
+## 原始模型加载错误（2026-10-28）
+
+- 用户将仓库名写成 Qwen3-4B，导致 https://huggingface.co/Qwen3-4B/ 下的文件查找 404；本项目官方起点为 Qwen/Qwen3-4B，缓存同样依赖完整仓库名。
+- 固定版本 Transformers 5.20.2 的 models/auto/auto_factory.py 先提取顶层 hub_kwargs，再从独立 adapter_kwargs 调用 find_adapter_config_file；只补充 revision，未继承 local_files_only。后者在 utils/peft_utils.py 中默认为 False，所以仅传顶层标志不足以保证探测离线。修复应显式传入 adapter_kwargs.local_files_only，不改第三方包或全局环境。
+- 回归通过真实 AutoModel 调用到适配器探测，修复前确认该标志为 False；修复后原始模型与 LoRA 底座调用均为 True。实际模型权重加载仍以临时随机微型模型验证，没有网络请求或预训练权重下载。完整官方仓库名仍是立即修正用户 404 的关键，缓存模式不自动补全名称。
+
 ## 原始 Qwen3 抽样入口（2026-10-28）
 
 - 需求是使用本项目尚未微调的起始模型生成回答，例如 Qwen/Qwen3-4B；原始模型仍按 CONTEXT.md 定义，不自动替换为名称中带 Base 的其他变体。
