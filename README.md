@@ -166,9 +166,28 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /home/yunli/miniconda3/bin/python prepare
 
 保留计算器注释只提供训练文本，不会自动执行计算。
 
-## 抽题查看 checkpoint 的回答
+## 抽题查看原始模型或 checkpoint 的回答
 
-抽样入口同时支持本地完整模型和 LoRA 适配器目录。默认从 GSM8K **test** 固定抽取 5 道不同题目，启用思考模式，将问题、模型思考、最终输出和数据集原始参考解答保存到 Markdown 文件。没有生成 `</think>` 时保留整段生成内容并标明尚未识别最终输出。终端仅提示保存位置。例如查看当前下载的 0.6B checkpoint：
+抽样入口支持微调前的原始 Qwen3、本地完整模型和 LoRA 适配器目录。默认从 GSM8K **test** 固定抽取 5 道不同题目，启用思考模式，将问题、模型思考、最终输出和数据集原始参考解答保存到 Markdown 文件。没有生成 `</think>` 时保留整段生成内容并标明尚未识别最终输出。终端仅提示保存位置。
+
+通过模型名称抽样微调前的起始模型，与 --checkpoint 二选一：
+
+```bash
+# 32 GB 训练机：
+python sample_checkpoint.py --model-name Qwen/Qwen3-4B
+# 8 GB 开发机：
+python sample_checkpoint.py --model-name Qwen/Qwen3-0.6B
+```
+
+这里的“原始”指尚未接受本项目微调，例如使用训练起点 Qwen/Qwen3-4B，不自动替换为其他 Base 变体。原始模型入口默认允许下载缺失的模型和分词器文件，已有缓存会复用；加 --local-files-only 可只使用缓存。使用 --revision 可指定模型分支、标签或提交，报告记录模型名称和解析出的版本，模型和分词器共用同一版本；比较某个 LoRA 结果时，如其 adapter_config.json 中记录了非空的底座 revision，可使用该提交。
+
+```bash
+python sample_checkpoint.py --model-name Qwen/Qwen3-4B --local-files-only
+```
+
+原始模型默认报告名为 `outputs/samples/original-Qwen--Qwen3-4B-test-seed42.md`，与 checkpoint 报告分开。保持相同的 --split、--seed、--num-samples 和 --max-new-tokens，可在同一模型规模下观察微调前后的回答；生成种子在模型加载后设置，使加载过程不影响生成随机状态。少量抽样不代替完整评测。
+
+例如查看当前下载的 0.6B checkpoint：
 
 ```bash
 python sample_checkpoint.py \
@@ -178,7 +197,7 @@ python sample_checkpoint.py \
 
 这条命令默认保存到项目内的 `outputs/samples/checkpoint-1404-test-seed42.md`；重复运行会更新同名报告。使用 `--output 路径.md` 可以自定义保存位置。
 
-分词器始终从 `--checkpoint` 本地目录加载，单独的 `chat_template.jinja` 也需一起保留。完整模型目录包含 `config.json` 和权重；LoRA 目录包含 `adapter_config.json` 和适配器权重，程序会另外从本地路径或 Hugging Face 缓存加载配置中记录的同一底座及 revision。所有模型加载均保持 `local_files_only=True`，底座缓存缺失时先在该机器准备对应版本的底座。推理启用缓存并关闭梯度，不加载优化器状态。
+使用 --checkpoint 时，分词器从该本地目录加载，单独的 `chat_template.jinja` 也需一起保留。完整模型目录包含 `config.json` 和权重；LoRA 目录包含 `adapter_config.json` 和适配器权重，程序会另外从本地路径或 Hugging Face 缓存加载配置中记录的同一底座及 revision。checkpoint 路径继续保持 `local_files_only=True`，底座缓存缺失时先在该机器准备对应版本的底座。推理启用缓存并关闭梯度，不加载优化器状态。
 
 例如，在已有对应底座缓存的训练机上查看 LoRA 的最终产物：
 
