@@ -19,7 +19,10 @@ def parse_args():
     parser.add_argument("--split", choices=("test", "train"), default="test")
     parser.add_argument("--num-samples", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument(
+        "--max-new-tokens", type=int, default=COMMON_CONFIG["generation"]["max_new_tokens"],
+        help="Output token budget including thinking (default: 32768).",
+    )
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     parser.add_argument(
         "--output", type=Path,
@@ -52,10 +55,13 @@ def generate_answer(model, tokenizer, question, max_new_tokens):
         return_dict=True,
         return_tensors="pt",
     ).to(model.device)
+    context_limit = getattr(model.config, "max_position_embeddings", None)
+    if context_limit and inputs["input_ids"].shape[-1] + max_new_tokens > context_limit:
+        raise ValueError("Prompt and output budget exceed the model context; reduce --max-new-tokens.")
+    generation_config = {**COMMON_CONFIG["generation"], "max_new_tokens": max_new_tokens}
     outputs = model.generate(
         **inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,
+        **generation_config,
         num_beams=1,
         use_cache=True,
         pad_token_id=tokenizer.pad_token_id,
@@ -66,7 +72,16 @@ def generate_answer(model, tokenizer, question, max_new_tokens):
         eos_ids = tokenizer.eos_token_id
     eos_ids = {eos_ids} if isinstance(eos_ids, int) else set(eos_ids or [])
     truncated = len(generated) >= max_new_tokens and generated[-1] not in eos_ids
-    return tokenizer.decode(generated, skip_special_tokens=True).strip(), len(generated), truncated
+    think_end_id = tokenizer.convert_tokens_to_ids("</think>")
+    thinking = None
+    answer_ids = generated
+    if think_end_id in generated:
+        boundary = generated.index(think_end_id)
+        thinking = tokenizer.decode(generated[:boundary], skip_special_tokens=True).strip()
+        thinking = thinking.removeprefix("<think>").strip()
+        answer_ids = generated[boundary + 1:]
+    answer = tokenizer.decode(answer_ids, skip_special_tokens=True).strip()
+    return thinking, answer, len(generated), truncated
 
 
 def main():
@@ -99,25 +114,37 @@ def main():
     model.eval()
     model.config.use_cache = True
 
+    generation_config = {**COMMON_CONFIG["generation"], "max_new_tokens": args.max_new_tokens}
     report = [
         "# Checkpoint 样本问答\n",
         f"- Checkpoint：`{args.checkpoint}`\n"
         f"- 数据集：`{dataset_config['path']}/{dataset_config['name']}`，split：`{args.split}`\n"
         f"- 种子：{args.seed}；样本索引：{indices}\n"
         f"- 设备：`{device}`；推理精度：`{dtype}`\n"
-        f"- enable_thinking：`{COMMON_CONFIG['enable_thinking']}`；do_sample：`False`\n"
+        f"- enable_thinking：`{COMMON_CONFIG['enable_thinking']}`；生成设置：`{generation_config}`\n"
         f"- 最大新词元数：{args.max_new_tokens}\n",
     ]
     for number, index in enumerate(indices, 1):
         row = dataset[index]
-        answer, token_count, truncated = generate_answer(
+        thinking, answer, token_count, truncated = generate_answer(
             model, tokenizer, row["question"], args.max_new_tokens,
         )
         status = "达到生成长度上限，回答可能未结束" if truncated else "正常结束"
+        if thinking is None:
+            model_response = (
+                "### 模型生成内容\n\n"
+                "未检测到思考结束标记，以下保留生成内容，不将其判定为最终输出。\n\n"
+                f"````text\n{answer}\n````\n\n"
+            )
+        else:
+            model_response = (
+                f"### 模型思考\n\n{thinking}\n\n"
+                f"### 模型最终输出\n\n{answer}\n\n"
+            )
         section = (
             f"## 样本 {number}（{args.split} 索引 {index}）\n\n"
             f"### 问题\n\n{row['question']}\n\n"
-            f"### 模型回答\n\n{answer}\n\n"
+            f"{model_response}"
             f"生成 {token_count} tokens；{status}。\n\n"
             f"### 数据集参考解答\n\n{row['answer']}\n"
         )

@@ -1,5 +1,14 @@
 # 环境发现
 
+## 当前思考 SFT 与运行目录适配
+
+- 2026-10-27 用户选定当前 SFT 格式及监督范围，规范见 [思考模式约定](docs/qwen3-thinking.md#sft-样本与损失掩码)。用户进一步说明忽略 #### 指不指导模型生成它；当前通过分词前去除分隔符，使其没有对应的词元损失项，原始参考字段保留。
+- 已用本地 0.6B checkpoint 分词器离线核对 GSM8K train 全部 7473 条：监督文本精确等于格式化的推导、最终结果及助手结束标记，最长 548 tokens。推导、计算器注释与最终结果未改写，题目/前缀和 padding 标签均排除。没有本地 1.7B 分词器缓存，未下载验证该规模。
+- 对两条真实样本进行词表的一一映射后，用随机微型 Qwen3 在 CPU 上核对移位交叉熵与手工计算一致，反向梯度有限；这只验证标签与损失集成，不验证真实模型训练效果或显存。
+- 新训练目录由 train_sft.reserve_output_dir 原子创建。已验证已有运行目录、空目录、同名文件、八次并发分配、续训默认 checkpoint 父目录及显式输出覆盖；旧目录标记文件内容保持不变。
+- 训练入口使用替代数据/模型加载器及 Trainer，验证实际加后缀目录贯穿 TrainingArguments、final 模型路径和训练汇总；真实 TensorBoard 回调事件也写入该目录的 runs/，未加载预训练权重。
+- 抽样入口同步已合并的官方思考模式约定。替代生成器验证采样参数、思考/最终输出分段、缺少闭合标记时保留内容、EOS 与长度边界、上下文预算检查和终端仅提示文件路径；未运行真实问答。
+
 ## GSM8K 公开实现核查
 
 - 2026-10-27 研究范围为代表性一手实现，不据此声称所有项目都采用同一方案。
@@ -11,12 +20,12 @@
 - 已继续追踪 verl 单轮路径：[ray_trainer.compute_response_mask](https://github.com/verl-project/verl/blob/main/verl/trainer/ppo/ray_trainer.py) 从响应位置的注意力掩码构建 response_mask；[core_algos.compute_grpo_outcome_advantage](https://github.com/verl-project/verl/blob/main/verl/trainer/ppo/core_algos.py) 将结果优势广播到 response_mask，策略损失也按该 mask 聚合。因此如果响应包含思考词元，它们同样参与策略训练，不能解释为只训练最后答案词元。
 - [ms-swift 默认 SFT 损失](https://github.com/modelscope/ms-swift/blob/main/docs/source_en/Instruction/Command-line-parameters.md)：assistant 响应计算交叉熵，默认不监督用户/系统部分；ignore_empty_think 只去掉空块，ignore_think_prefix 只去掉开头标记，后续推导和闭合标记仍计算损失。这是 Qwen 官方推荐框架的通用机制，并非 GSM8K 专属实验结果。
 - 核查结论：上述普通/显式思考 SFT 都支持完整推导作为训练目标，未找到整段非空思考默认屏蔽的设置；结果奖励 RL 则只核对最终数值，但通常更新完整生成响应。不能把“只按最终答案打分”解释成“只对最终答案词元训练”。
-- 对本项目的建议是以“推导与最终输出都监督，问题与 padding 屏蔽”作为思考 SFT 的基线；这是基于实现的建议，不是已经选定或验证效果的实验决定。本轮未改代码或运行配置。
+- 研究时建议以“推导与最终输出都监督，问题与 padding 屏蔽”作为思考 SFT 基线；用户随后采纳并进入上面的适配步骤。没有实验结果证明其相对效果。
 
 ## Qwen3 思考模式与损失范围
 
-- 用户于 2026-10-27 确定后续各规模 Qwen3 遵循官方思考模式最佳实践；长期约定见 [思考模式约定](docs/qwen3-thinking.md)。当前 Python/YAML 尚未适配该新约定。
-- Qwen 官方 ms-swift 指南中的 ignore_empty_think 指屏蔽空思考块，不是屏蔽非空推导。用户提出的非空思考段损失掩码尚未成为训练决定。
+- 用户于 2026-10-27 确定后续各规模 Qwen3 遵循官方思考模式最佳实践；长期约定见 [思考模式约定](docs/qwen3-thinking.md)。当前 SFT 与抽样入口已适配，已有 checkpoint 未重新训练。
+- Qwen 官方 ms-swift 指南中的 ignore_empty_think 指屏蔽空思考块，不是屏蔽非空推导。用户随后选定同时监督推导与最终结果，没有采用屏蔽非空思考段方案。
 - 已核对当前 Transformers 的因果语言模型损失：先构造完整 logits，再由交叉熵忽略 labels=-100 的位置；它没有将这些输入位置移出注意力上下文，也没有按标签掩码切断此前隐藏状态到最终输出的计算依赖。
 - 文档站训练页面无法访问，改用 QwenLM/Qwen3 官方仓库的 [ms-swift 训练说明](https://github.com/QwenLM/Qwen3/blob/main/docs/source/training/ms_swift.md) 交叉核对。
 
@@ -64,9 +73,9 @@
 - 当前仓库 Python 文件没有接入计算器、工具调用或执行推理代码的控制流程；`main.py` 直接调用 `model.generate()`。已有终端对照分支也是直接生成。
 - 2026-10-26 在 `/home/yunli/miniconda3/bin/python` 核对安装包：torch 2.6.0+cu124、transformers 5.20.2、datasets 5.1.0、accelerate 1.15.0、trl 1.16.0、sympy 1.13.1；该解释器未安装 peft、vllm、qwen-agent 或 math-verify。包清单说明当前解释器的安装状态，不代表其他环境或整台机器。
 - 现有 Python 与 Transformers 已具备实现简单计算器控制循环的基础，但计算器接入仍需另写程序。SymPy 已安装不等于模型会自动调用它。
-- 训练目标采用原始 `answer`，不追加提示词或转换文本；`train_sft.py` 直接复用样本构造，不接入计算器推理循环。
+- 最初的训练目标采用原始 `answer`，不追加提示词或转换文本；本轮已改为上述思考格式。`train_sft.py` 继续复用样本构造，不接入计算器推理循环。
 - 当前 Transformers 的 `apply_chat_template()` 在本机返回 BatchEncoding；不能把返回对象本身当作 token 列表。代码显式设置 `return_dict=True` 并读取 `input_ids`。
-- 本机 Qwen3 模板将普通助手回答放在空 `<think>` 前缀之后。样本使用 `enable_thinking=False` 生成同样的提示前缀，并将整个前缀设为不计损失；原始解答及 `<|im_end|>` 参与监督。后续训练和推理沿用这一模板。
+- 旧非思考实现使用 `enable_thinking=False` 生成空 think 前缀，整个前缀不计损失；本轮改为思考模式，非空推导和最终结果参与监督。旧 checkpoint 的训练格式没有因此改变。
 - 已实际预览第一条训练样本，解题过程、两处计算器注释和最后的 `#### 72` 原样出现在监督文本中。
 
 ## SFT 训练代码验证

@@ -1,13 +1,23 @@
 # GSM8K SFT
 
-使用原始 GSM8K 题目和标准解答，对 Qwen3 做全参数监督微调。训练机默认使用 Qwen3-1.7B，开发机默认使用 Qwen3-0.6B。训练使用 PyTorch、Transformers、Datasets 和 Accelerate，配置通过 PyYAML 读取。
+使用 GSM8K 题目和标准解答，对 Qwen3 做思考模式全参数监督微调。训练机默认使用 Qwen3-1.7B，开发机默认使用 Qwen3-0.6B。训练使用 PyTorch、Transformers、Datasets 和 Accelerate，配置通过 PyYAML 读取。
 
 ## 数据约定
 
-- `question` 和 `answer` 原样使用，保留解题过程、`<<表达式=结果>>` 计算器注释和 `#### 数值`。
-- 使用 Qwen3 的非思考对话模板，将解题过程放在普通助手回答中；模板自带的空 `<think>` 前缀不计损失。这仍然包含逐步解题过程。
-- `input_ids` 包含题目和标准解答；题目和对话前缀的 `labels` 为 `-100`，助手解答及结束标记接受监督。标签保持与输入等长，由后续因果语言模型在计算损失时移位。
+- `question` 原样使用。预处理用 `answer` 中唯一的 `####` 拆出推导和最终结果；原始数据文件不改动，推导中的 `<<表达式=结果>>` 计算器注释保留。
+- 使用 Qwen3 思考模式，将推导放入 `<think>...</think>`，块外只放数据集的最终结果。`####` 在分词前去掉，不参与损失，也不作为要求模型生成的目标；原始参考解答中仍保留它。
+- `input_ids` 包含题目和格式化后的标准解答；题目和对话前缀的 `labels` 为 `-100`，思考内容、最终结果、格式标记及助手结束标记接受监督。使用同一个因果语言模型交叉熵，标签保持与输入等长，由模型计算损失时移位。
 - 样本不截断，批次内按最长样本补齐，补齐位置的标签为 `-100`。
+
+助手训练目标的形式为：
+
+```text
+<think>
+数据集中的推导过程
+</think>
+
+数据集中的最终结果
+```
 
 ## 训练
 
@@ -46,7 +56,7 @@ python train_sft.py --config configs/development/sft.yaml
 
 AutoDL 的 NVIDIA vGPU-32GB 实测显示此前每批 2 条会在反向传播时显存不足，因此将微批量降为 1，并增加累积次数。上面的分配器环境变量用于缓解变长样本带来的显存碎片，需在启动 Python 前设置。新配置的峰值显存仍需在训练机上实测。
 
-训练损失每 10 个优化器更新步骤显示一次。每轮保存检查点，保留最近两个；完整训练结束后，模型和分词器保存在 `outputs/training/qwen3-1.7b-gsm8k-sft/final/`，训练汇总保存在同一运行目录下的 `train_results.json`。新输出目录与原有 0.6B 检查点分开。程序只使用训练集，不自动评测。
+训练损失每 10 个优化器更新步骤显示一次。每轮保存检查点，保留最近两个；完整训练结束后，模型和分词器保存在实际运行目录的 `final/`，训练汇总保存在同一目录下的 `train_results.json`。训练机默认基础目录为 `/root/autodl-tmp/outputs/training/qwen3-1.7b-gsm8k-sft`，保留 AutoDL 数据盘位置。程序只使用训练集，不自动评测。
 
 命令行中的 `--epochs`、`--learning-rate`、`--batch-size`、`--gradient-accumulation-steps` 和 `--output-dir` 可临时覆盖所选配置。例如只训练一轮并使用新的输出目录：
 
@@ -54,13 +64,21 @@ AutoDL 的 NVIDIA vGPU-32GB 实测显示此前每批 2 条会在反向传播时�
 python train_sft.py --epochs 1 --output-dir outputs/training/qwen3-1.7b-gsm8k-sft-1epoch
 ```
 
-已有非空输出目录时，程序要求另选目录或明确续训。中断后可以指定现有检查点恢复训练；将下面的路径替换为实际目录：
+每次新训练会创建独立目录；基础目录已存在时，在末尾依次尝试 `-1`、`-2` 等数字后缀，选择第一个不存在的目录。空目录和同名文件也会避开。`--output-dir` 指定的目录同样遵循此规则，启动时打印最终路径，旧结果保留。例如：
 
-```bash
-python train_sft.py --resume-from-checkpoint outputs/training/qwen3-1.7b-gsm8k-sft/checkpoint-STEP
+```text
+qwen3-1.7b-gsm8k-sft/
+qwen3-1.7b-gsm8k-sft-1/
+qwen3-1.7b-gsm8k-sft-2/
 ```
 
-续训时使用初次训练的模型、配置文件及参数；如果初次使用了自定义 `--output-dir`，续训时也指定同一路径。开发机续训也需传入 `--config configs/development/sft.yaml`。
+中断后可以指定现有检查点恢复训练；续训默认使用该 checkpoint 的父目录，不加后缀。将下面的路径替换为启动日志中实际目录下的 checkpoint：
+
+```bash
+python train_sft.py --resume-from-checkpoint /root/autodl-tmp/outputs/training/qwen3-1.7b-gsm8k-sft-1/checkpoint-STEP
+```
+
+续训时使用初次训练的模型、配置文件及参数；显式传入的 `--output-dir` 优先于 checkpoint 父目录，按指定路径续训。开发机续训也需传入 `--config configs/development/sft.yaml`。此前非思考样本训练的 checkpoint 保留原状；新的思考格式训练作为独立实验开始。
 
 若沿用旧配置运行后 OOM，可直接用命令行覆盖重试，并使用新目录保留失败日志：
 
@@ -70,7 +88,7 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python train_sft.py \
   --output-dir outputs/training/qwen3-1.7b-gsm8k-sft-bs1
 ```
 
-按当前每轮保存策略，第一轮结束前失败的训练尚未产生检查点，需从头重试。若重试目录已有内容，再选择新目录；从实际存在的检查点恢复时才使用 `--resume-from-checkpoint`。
+按当前每轮保存策略，第一轮结束前失败的训练尚未产生检查点，需从头重试。新训练会自动避开已有目录；从实际存在的检查点恢复时才使用 `--resume-from-checkpoint`。
 
 ## TensorBoard 训练指标
 
@@ -95,13 +113,13 @@ Trainer 在第 1 次参数更新和之后每 10 次参数更新记录一次曲�
 
 日志默认写入所选 `output_dir` 下的 `runs/<时间戳_主机名>/`，训练机和开发机随各自输出目录分开；`--output-dir` 覆盖后日志也随之移动。恢复检查点时会新建日志目录，横轴沿用恢复的更新次数。日志已包含在 Git 忽略的 `outputs/` 中。
 
-在项目目录启动查看服务：
+在训练机启动查看服务，覆盖基础目录及所有数字后缀目录：
 
 ```bash
-python -m tensorboard.main --logdir outputs --host 127.0.0.1 --port 6006
+python -m tensorboard.main --logdir /root/autodl-tmp/outputs/training --host 127.0.0.1 --port 6006
 ```
 
-在浏览器打开 `http://127.0.0.1:6006`，在 Scalars 或 Time Series 中选择对应运行。命令会同时发现两台机器保存在此目录中的日志；也可将 `--logdir` 指向某次训练的输出目录。若训练运行在远端，通过 SSH 转发该端口后在本机查看，例如 `ssh -L 6006:127.0.0.1:6006 用户名@训练机地址`。
+在浏览器打开 `http://127.0.0.1:6006`，在 Scalars 或 Time Series 中选择对应运行。开发机使用 `--logdir outputs`；自定义了输出位置时，将 `--logdir` 指向实际运行目录或其父目录。若训练运行在远端，通过 SSH 转发该端口后在本机查看，例如 `ssh -L 6006:127.0.0.1:6006 用户名@训练机地址`。
 
 当前训练脚本只使用训练集；验证损失和 GSM8K 答案正确率需后续接入评测后记录。
 
@@ -138,13 +156,13 @@ python prepare_sft_data.py --config configs/training/sft.yaml
 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /home/yunli/miniconda3/bin/python prepare_sft_data.py
 ```
 
-`build_sft_example()` 返回 `input_ids`、`attention_mask` 和 `labels`，供后续训练代码复用。推理时需使用同样的非思考前缀及答案格式约定。
+`build_sft_example()` 返回 `input_ids`、`attention_mask` 和 `labels`，供训练代码复用。缺少唯一 `####`、推导为空或最终结果为空的解答会报错，不静默改成其他监督目标。
 
 保留计算器注释只提供训练文本，不会自动执行计算。
 
 ## 抽题查看 checkpoint 的回答
 
-下载好的 checkpoint 可以直接加载。默认从 GSM8K **test** 固定抽取 5 道不同题目，使用训练时相同的非思考前缀，将问题、模型回答和数据集参考解答保存到 Markdown 文件。终端仅提示保存位置。例如查看当前下载的 0.6B checkpoint：
+下载好的 checkpoint 可以直接加载。默认从 GSM8K **test** 固定抽取 5 道不同题目，启用思考模式，将问题、模型思考、最终输出和数据集原始参考解答保存到 Markdown 文件。没有生成 `</think>` 时保留整段生成内容并标明尚未识别最终输出。终端仅提示保存位置。例如查看当前下载的 0.6B checkpoint：
 
 ```bash
 python sample_checkpoint.py \
@@ -158,7 +176,7 @@ python sample_checkpoint.py \
 
 数据集已有缓存时，可在命令前加 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 离线运行。默认自动选择 CUDA，按设备能力使用 BF16 或 FP16；没有 CUDA 时使用 CPU/FP32，也可用 `--device cpu` 显式选择。
 
-`--split train` 可查看训练集题目，`--seed` 控制抽取哪些题；默认每一步选择概率最高的词元生成回答。`--max-new-tokens` 默认为 512，触及长度上限且未生成结束标记时会在报告中提示回答可能未结束。
+`--split train` 可查看训练集题目，`--seed` 控制抽题及生成随机种子。按 Qwen 官方思考模式建议使用采样：`temperature=0.6`、`top_p=0.95`、`top_k=20`、`min_p=0`，设置集中在 `configs/common.yaml`。`--max-new-tokens` 默认 32768，包含思考与最终输出；可按资源预算调小，实际预算记录在报告中。输入加输出预算超过模型配置的上下文长度时会报错，触及生成上限且未生成结束标记时提示截断。
 
 只将原始问题输入模型，参考解答用于事后对照。少量样本用于观察回答格式和解题过程，完整答案正确率仍需另行评测。
 

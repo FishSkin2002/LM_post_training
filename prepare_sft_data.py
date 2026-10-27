@@ -23,8 +23,18 @@ def load_machine_config(config_path: Path) -> dict:
     return config
 
 
+def format_gsm8k_answer(answer: str) -> str:
+    """Separate the reference reasoning and result without changing their text."""
+    if answer.count("####") != 1:
+        raise ValueError("GSM8K answer must contain exactly one #### separator.")
+    reasoning, final_answer = (part.strip() for part in answer.split("####", 1))
+    if not reasoning or not final_answer:
+        raise ValueError("GSM8K answer must contain both reasoning and a final result.")
+    return f"<think>\n{reasoning}\n</think>\n\n{final_answer}"
+
+
 def build_sft_example(tokenizer, question: str, answer: str) -> dict[str, list[int]]:
-    """Return unpadded model inputs with loss restricted to the completion."""
+    """Supervise the reference reasoning, result and assistant end marker."""
     messages = [{"role": "user", "content": question}]
     prompt = tokenizer.apply_chat_template(
         messages,
@@ -34,7 +44,7 @@ def build_sft_example(tokenizer, question: str, answer: str) -> dict[str, list[i
         return_dict=True,
     )
     encoded = tokenizer.apply_chat_template(
-        messages + [{"role": "assistant", "content": answer}],
+        messages + [{"role": "assistant", "content": format_gsm8k_answer(answer)}],
         tokenize=True,
         add_generation_prompt=False,
         enable_thinking=COMMON_CONFIG["enable_thinking"],
