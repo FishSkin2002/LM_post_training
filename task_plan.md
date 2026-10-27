@@ -11,11 +11,13 @@
 | 核对来源与当前实现 | complete | 核对官方模型卡、训练说明和本机损失实现；从最新 origin/main（9fca1be）创建 codex/qwen3-thinking-practice-policy。 |
 | 记录已确定约定 | complete | 已增加 AGENTS 条件指针及集中约定文档，区分官方推理参数、待讨论掩码和当前代码状态；CONTEXT 补齐领域定义。 |
 | 校对文档 | complete | 已核对官方模型卡、训练指南和损失语义；仅修改 Markdown，文档入口有效，git diff --check 通过，未运行模型。 |
-| 交付要求文档 PR | pending | 独立提交、推送并创建 main 目标 PR，附加到当前聊天；本轮不合并。 |
+| 交付要求文档 PR | complete | 规则文档提交已推送，main 目标 PR #9 已创建并附加到当前聊天；本轮不合并。 |
 
 ## 交付
 
 本轮属于项目要求文档维护类，独立交付思考模式约定。规则进入主线后，运行配置和样本构造再按后续已明确的小步骤适配。
+
+[PR #9](https://github.com/FishSkin2002/qwen/pull/9) 已创建。本轮已完成约定记录和掩码语义核查；是否采用非空思考段损失掩码仍留作后续实验选择。
 
 ## 边界
 

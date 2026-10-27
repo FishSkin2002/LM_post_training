@@ -7,6 +7,7 @@
 - 用 writing-for-agents 将长期约定集中放入 docs/qwen3-thinking.md，AGENTS 仅增加配置思考模式、生成参数或训练损失范围时的读取指针；CONTEXT 补充思考段、最终输出及两种掩码定义。
 - 已核对 Qwen 官方模型卡及 ms-swift 训练说明，区分思考模式采样最佳实践和 ignore_empty_think 的含义。最终输出单独监督仍是待讨论的实验，未设为默认。
 - 文档已区分给定思考段后的条件预测、通过前文隐藏状态传播的梯度，以及基于最终正确性奖励的 GRPO；标签掩码不等于移除上下文或节省思考段计算。已校对入口和引用，git diff --check 通过，所有改动均为 Markdown，未运行模型。
+- 规则文档提交 `d58146c` 已正常推送，已创建并附加 [PR #9](https://github.com/FishSkin2002/qwen/pull/9)。未合并 PR；当前 Python/YAML 和损失掩码保持原实现，本轮没有训练或推理。
 
 ## 2026-10-27：问答结果默认写入文件
 
