@@ -59,6 +59,39 @@ python train_sft.py --resume-from-checkpoint outputs/training/qwen3-1.7b-gsm8k-s
 
 续训时使用初次训练的模型、配置文件及参数；如果初次使用了自定义 `--output-dir`，续训时也指定同一路径。开发机续训也需传入 `--config configs/development/sft.yaml`。
 
+## TensorBoard 训练指标
+
+两台机器的配置均已启用 TensorBoard。先在训练用的 Python 环境中安装项目依赖，然后按上面的命令训练：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Trainer 在第 1 次参数更新和之后每 10 次参数更新记录一次曲线；横轴为优化器更新次数，梯度累积中的单个微批次不会单独记为一步。
+
+| TensorBoard 指标 | 含义 |
+| --- | --- |
+| `train/loss` | 上次记录以来的平均训练损失 |
+| `train/learning_rate` | 学习率 |
+| `train/grad_norm` | 当前更新在梯度裁剪前的梯度范数 |
+| `train/epoch` | 当前训练轮次，含轮内进度 |
+| `train/train_loss` | 训练结束时的整体平均损失 |
+| `train/train_runtime` | 本次训练耗时，单位为秒，结束时记录 |
+| `train/train_samples_per_second` | 本次训练的平均样本吞吐量，结束时记录 |
+| `train/train_steps_per_second` | 本次训练每秒平均参数更新次数，结束时记录 |
+
+日志默认写入所选 `output_dir` 下的 `runs/<时间戳_主机名>/`，训练机和开发机随各自输出目录分开；`--output-dir` 覆盖后日志也随之移动。恢复检查点时会新建日志目录，横轴沿用恢复的更新次数。日志已包含在 Git 忽略的 `outputs/` 中。
+
+在项目目录启动查看服务：
+
+```bash
+python -m tensorboard.main --logdir outputs --host 127.0.0.1 --port 6006
+```
+
+在浏览器打开 `http://127.0.0.1:6006`，在 Scalars 或 Time Series 中选择对应运行。命令会同时发现两台机器保存在此目录中的日志；也可将 `--logdir` 指向某次训练的输出目录。若训练运行在远端，通过 SSH 转发该端口后在本机查看，例如 `ssh -L 6006:127.0.0.1:6006 用户名@训练机地址`。
+
+当前训练脚本只使用训练集；验证损失和 GSM8K 答案正确率需后续接入评测后记录。
+
 ## 预览训练样本
 
 在已有依赖的环境中，预览一条训练样本及其词元和标签：
@@ -89,3 +122,5 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /home/yunli/miniconda3/bin/python prepare
 - [Qwen3-0.6B 对话模板与模式说明](https://huggingface.co/Qwen/Qwen3-0.6B)
 - [Qwen3-1.7B 对话模板与模式说明](https://huggingface.co/Qwen/Qwen3-1.7B)
 - [Transformers Trainer](https://huggingface.co/docs/transformers/main_classes/trainer)
+- [Transformers TensorBoard 回调](https://huggingface.co/docs/transformers/main_classes/callback#transformers.integrations.TensorBoardCallback)
+- [TensorBoard 查看日志](https://www.tensorflow.org/tensorboard/get_started)

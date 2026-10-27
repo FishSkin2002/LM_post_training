@@ -52,6 +52,13 @@
 - 2026-10-27 验证两台机器配置能构造 TrainingArguments，模型字段已剥离；用替代加载器确认训练入口对分词器和权重传入同一模型名称，预览入口默认 0.6B 且可显式选择 1.7B。CPU 随机微型 Qwen3 配合非重入梯度检查点完成反向传播，融合 AdamW 和 Adafactor 均完成一次有限值参数更新。命令行覆盖、无效 YAML/模型字段及非空输出目录保护通过；未加载预训练权重或数据集，未验证真实 GPU 峰值显存。
 - 参考：[Transformers Trainer](https://huggingface.co/docs/transformers/main_classes/trainer)。接口与功能验证以本机固定版本为准。
 
+## TensorBoard 日志
+
+- 2026-10-27 本机已安装 TensorBoard 2.21.0，现作为固定直接依赖加入 requirements.txt。训练机和开发机 YAML 使用 `report_to: tensorboard`，由 Transformers 内置回调记录 Trainer 产生的标量；当前训练曲线包含损失、学习率、梯度范数和轮次，结束时还有总体损失、耗时和吞吐量。
+- 本机 Transformers 5.20.2 的 TensorBoardCallback 默认将日志写入 `output_dir/runs/<时间戳_主机名>/`，可随 `--output-dir` 自动隔离。该版本使用环境变量 `TENSORBOARD_LOGGING_DIR` 覆盖默认路径，而非 TrainingArguments 的 `logging_dir` 字段；本项目沿用默认路径。使用外部环境变量时需自行保持不同实验目录分开。
+- 接口以固定版本源码 `transformers/integrations/integration_utils.py` 为准；参考 [官方回调说明](https://huggingface.co/docs/transformers/main_classes/callback#transformers.integrations.TensorBoardCallback) 和 [TensorBoard 查看方法](https://www.tensorflow.org/tensorboard/get_started)。TensorBoard 记录训练过程；答案正确率仍需独立评测。
+- 已用两套 YAML 分别完成 CPU 随机微型 Qwen3 的 11 次更新，从真实事件文件读回 8 项主要指标且数值有限，核对曲线步数 1、10 和结束汇总步数 11；同时确认训练参数/模型配置文本写入、`--output-dir` 覆盖及两台机器的日志隔离。没有加载预训练权重或 GSM8K，也没有验证正式训练指标的数值表现。
+
 ## Git 权限核查
 
 - GitHub 插件在本轮返回的账号为 FishSkin2002，但对 `FishSkin2002/qwen` 仓库查询返回 404。SSH 访问仓库正常，不能把插件的仓库访问失败理解为远端仓库不存在。
