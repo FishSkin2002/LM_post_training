@@ -2,29 +2,28 @@
 
 ## 当前小步
 
-为两台机器的 SFT 配置启用 TensorBoard，记录主要训练指标并补齐查看方法。
+修复训练机下载分词器时的 Brotli 接口不兼容，补齐下载依赖并提供训练机修复命令。
 
 ## 阶段
 
 | 阶段 | 状态 | 完成条件 |
 | --- | --- | --- |
-| 核实配置与环境 | complete | 已确认 Trainer 内置 TensorBoard 回调、本机依赖版本及日志路径；PR #3 已合并，从最新 origin/main（90348df）创建 codex/tensorboard-sft-metrics。 |
-| 启用日志与说明 | complete | 两套配置启用内置 TensorBoard 回调，固定依赖 2.21.0；README 包含 8 项主要指标、日志位置和本机/远端查看命令。 |
-| 验证事件文件 | complete | 两套配置各完成 CPU 随机微型 Qwen3 的 11 次更新；真实事件文件读回 8 项有限值指标，曲线步数为 1、10，结束汇总为 11；输出目录隔离通过。 |
-| 交付 PR | complete | 功能提交已正常推送，main 目标 PR #4 已创建并附加到当前聊天；本轮不合并。 |
+| 核实报错与依赖 | complete | 已核对下载层传入 output_buffer_limit，Brotli 旧 process 接口不接受该参数；PR #4 已合并，从最新 origin/main（cf34633）建立 codex/fix-brotli-download-compat。 |
+| 补齐依赖和说明 | complete | 固定 Brotli 1.2.1；README 包含同一解释器下的安装和解压 API 检查命令。 |
+| 验证下载解压链路 | complete | 仅向 /tmp 安装 Brotli 1.2.1；解压关键字接口、HTTPX2 解码器及响应流对小型 JSON 和 5.12 MB 内容往返校验通过，未修改开发机现有环境。 |
+| 交付 PR | pending | 正常提交、推送并创建 main 目标 PR，附加到当前聊天；本轮不合并。 |
 
 ## 交付
 
-本轮交付 TensorBoard 训练日志及直接配套文档。保持现有模型、数据和训练超参数；首步及每 10 次优化器更新记录训练曲线，结束时记录 Trainer 汇总指标。
-
-[PR #4](https://github.com/FishSkin2002/qwen/pull/4) 已创建。本轮完成；下次实际训练会自动记录，后续训练机短跑等待用户继续。
+本轮只修复下载依赖兼容性，不更改模型、训练参数或 TensorBoard 设置。训练机没有可用的远程连接，实际安装及联网分词器检查交由用户执行。
 
 ## 边界
 
-本轮不合并 PR，不改变 main，不启动真实模型训练，不增加评测或远端服务。允许用 CPU 随机微型模型验证事件写入。开发完成允许创建 PR，不等于获得 PR 合并授权。
+本轮不合并 PR，不改变 main，不启动模型训练，不删除模型缓存。开发完成允许创建 PR，不等于获得 PR 合并授权。
 
 项目要求、Git 历史保护与其他分支前缀边界仍按 docs/git-workflow.md 执行。
 
 ## 遇到的问题
 
-- 暂无。
+- 沙箱内 pip 无法找到候选发行包，按网络限制使用正式审批重试；验证包仅安装到 /tmp。
+- 本机 pip 缓存目录不可写，不能使用 pip cache；改用不写缓存的临时目标目录。
