@@ -92,6 +92,19 @@ python -m tensorboard.main --logdir outputs --host 127.0.0.1 --port 6006
 
 当前训练脚本只使用训练集；验证损失和 GSM8K 答案正确率需后续接入评测后记录。
 
+## 下载分词器时的 Brotli 报错
+
+若 `AutoTokenizer.from_pretrained()` 下载文件时在 `httpx2/_decoders.py` 报 `TypeError: process() takes no keyword arguments`，先修复训练所用解释器的 Brotli 依赖。HTTPX2 传入了 `output_buffer_limit`，旧版 Brotli 的 `process()` 不接受这个参数；项目依赖已固定兼容版本。
+
+在原来的训练环境中执行：
+
+```bash
+python -m pip install --upgrade "Brotli==1.2.1"
+python -c "import brotli; assert brotli.Decompressor().process(brotli.compress(b'ok'), output_buffer_limit=1024) == b'ok'; print('Brotli OK:', brotli.__version__)"
+```
+
+看到 `Brotli OK: 1.2.1` 后重新运行原训练命令。该错误发生在下载阶段，无须删除模型缓存或调整训练参数。完整新环境直接安装 `requirements.txt` 即可包含此依赖。
+
 ## 预览训练样本
 
 在已有依赖的环境中，预览一条训练样本及其词元和标签：
@@ -124,3 +137,4 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /home/yunli/miniconda3/bin/python prepare
 - [Transformers Trainer](https://huggingface.co/docs/transformers/main_classes/trainer)
 - [Transformers TensorBoard 回调](https://huggingface.co/docs/transformers/main_classes/callback#transformers.integrations.TensorBoardCallback)
 - [TensorBoard 查看日志](https://www.tensorflow.org/tensorboard/get_started)
+- [Brotli 1.2.0 的解压接口变更](https://github.com/google/brotli/releases/tag/v1.2.0)

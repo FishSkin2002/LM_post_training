@@ -1,5 +1,15 @@
 # 进展记录
 
+## 2026-10-27：修复训练机下载解压依赖
+
+- 用户在 AutoDL 的 Python 3.12/base 环境运行训练，下载 Qwen3-1.7B 的 tokenizer_config.json 时由 HTTPX2 Brotli 解压触发 `TypeError: process() takes no keyword arguments`；尚未进入训练。
+- 已核对本机 HTTPX2 2.16.0：BrotliDecoder 调用 `process(..., output_buffer_limit=...)`，其 Brotli 可选依赖声明要求 CPython 使用 Brotli >=1.2.0。官方 Brotli 1.2.0 发布说明确认新增该参数；拟固定至已发布的 1.2.1。
+- 已确认 PR #4 合并，通过受控入口从最新 origin/main（cf34633）新建 `codex/fix-brotli-download-compat`。候选解压包通过正式网络审批安装到 /tmp 验证，不修改开发机现有包。
+- requirements.txt 已固定 `Brotli==1.2.1`，README 补充原环境安装和解压 API 检查命令；训练代码、模型及超参数保持原有设置。
+- 在临时目录验证 Brotli 1.2.1 与 HTTPX2 2.16.0：带 `output_buffer_limit` 的接口调用、BrotliDecoder 分块解码和 HTTP 响应 `iter_bytes()` 均通过。小型分词器配置 JSON 和 5.12 MB 内容都能完整往返，差异检查通过。没有连接训练机、下载真实模型或启动训练。
+- 已向用户提供训练机可立即执行的单包更新命令。实际训练机修复结果尚待其执行后确认。
+- 功能提交 `016bb88` 已正常推送，已创建并附加 [PR #5](https://github.com/FishSkin2002/qwen/pull/5)。未合并 PR；训练机安装与重试由用户执行，本轮不启动训练。
+
 ## 2026-10-27：记录 TensorBoard 训练指标
 
 - 用户要求用 TensorBoard 记录主要训练指标；本轮只接入训练日志和使用说明，不启动真实模型训练。

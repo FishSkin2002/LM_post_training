@@ -59,6 +59,13 @@
 - 接口以固定版本源码 `transformers/integrations/integration_utils.py` 为准；参考 [官方回调说明](https://huggingface.co/docs/transformers/main_classes/callback#transformers.integrations.TensorBoardCallback) 和 [TensorBoard 查看方法](https://www.tensorflow.org/tensorboard/get_started)。TensorBoard 记录训练过程；答案正确率仍需独立评测。
 - 已用两套 YAML 分别完成 CPU 随机微型 Qwen3 的 11 次更新，从真实事件文件读回 8 项主要指标且数值有限，核对曲线步数 1、10 和结束汇总步数 11；同时确认训练参数/模型配置文本写入、`--output-dir` 覆盖及两台机器的日志隔离。没有加载预训练权重或 GSM8K，也没有验证正式训练指标的数值表现。
 
+## 训练机下载依赖
+
+- 2026-10-27 用户提供 AutoDL 日志：`/root/miniconda3` 的 Python 3.12/base 环境在下载 Qwen3-1.7B 分词器文件时，HTTPX2 的 BrotliDecoder 调用 `process(..., output_buffer_limit=...)` 报参数错误。训练尚未开始；从堆栈推断，实际导入的 Brotli 实现不支持下载层要求的接口。训练机具体包版本尚未直接查询，不能将开发机版本作为训练机版本。
+- 本机 HTTPX2 2.16.0 源码同样调用该参数；其发行元数据声明 CPython 的 Brotli 可选依赖为 `brotli>=1.2.0`。本机目前没有 Google Brotli，使用的是 brotlicffi 回退，因此此前离线模型缓存验证没有覆盖训练机这次下载错误。
+- [Brotli 1.2.0 官方发布说明](https://github.com/google/brotli/releases/tag/v1.2.0) 确认 `Decompressor.process` 新增 `output_buffer_limit`；[Brotli 1.2.1 官方版本](https://github.com/google/brotli/releases/tag/v1.2.1) 也已发布。修复方向是在训练所用解释器中安装兼容 Brotli，无须改变模型或删除缓存。
+- 项目依赖现固定 Brotli 1.2.1。仅在 /tmp 安装并验证其与本机 HTTPX2 2.16.0 的关键字接口、BrotliDecoder 和响应 `iter_bytes()`；小型 JSON 与 5.12 MB 数据的分块压缩/解压往返均通过。该验证覆盖报错的解压链路，不代表训练机实际安装结果或完整模型下载已经成功。
+
 ## Git 权限核查
 
 - GitHub 插件在本轮返回的账号为 FishSkin2002，但对 `FishSkin2002/qwen` 仓库查询返回 404。SSH 访问仓库正常，不能把插件的仓库访问失败理解为远端仓库不存在。
