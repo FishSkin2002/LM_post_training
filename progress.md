@@ -8,6 +8,7 @@
 - requirements.txt 已固定 `Brotli==1.2.1`，README 补充原环境安装和解压 API 检查命令；训练代码、模型及超参数保持原有设置。
 - 在临时目录验证 Brotli 1.2.1 与 HTTPX2 2.16.0：带 `output_buffer_limit` 的接口调用、BrotliDecoder 分块解码和 HTTP 响应 `iter_bytes()` 均通过。小型分词器配置 JSON 和 5.12 MB 内容都能完整往返，差异检查通过。没有连接训练机、下载真实模型或启动训练。
 - 已向用户提供训练机可立即执行的单包更新命令。实际训练机修复结果尚待其执行后确认。
+- 功能提交 `016bb88` 已正常推送，已创建并附加 [PR #5](https://github.com/FishSkin2002/qwen/pull/5)。未合并 PR；训练机安装与重试由用户执行，本轮不启动训练。
 
 ## 2026-10-27：记录 TensorBoard 训练指标
 

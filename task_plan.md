@@ -11,11 +11,13 @@
 | 核实报错与依赖 | complete | 已核对下载层传入 output_buffer_limit，Brotli 旧 process 接口不接受该参数；PR #4 已合并，从最新 origin/main（cf34633）建立 codex/fix-brotli-download-compat。 |
 | 补齐依赖和说明 | complete | 固定 Brotli 1.2.1；README 包含同一解释器下的安装和解压 API 检查命令。 |
 | 验证下载解压链路 | complete | 仅向 /tmp 安装 Brotli 1.2.1；解压关键字接口、HTTPX2 解码器及响应流对小型 JSON 和 5.12 MB 内容往返校验通过，未修改开发机现有环境。 |
-| 交付 PR | pending | 正常提交、推送并创建 main 目标 PR，附加到当前聊天；本轮不合并。 |
+| 交付 PR | complete | 功能提交已推送，main 目标 PR #5 已创建并附加到当前聊天；本轮不合并。 |
 
 ## 交付
 
 本轮只修复下载依赖兼容性，不更改模型、训练参数或 TensorBoard 设置。训练机没有可用的远程连接，实际安装及联网分词器检查交由用户执行。
+
+[PR #5](https://github.com/FishSkin2002/qwen/pull/5) 已创建。本轮修复完成，下一步由用户在训练机安装 Brotli 1.2.1、执行接口检查并重试原命令。
 
 ## 边界
 
