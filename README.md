@@ -27,6 +27,7 @@ configs/
 在租用 GPU 上进入仓库目录，使用装有 `requirements.txt` 中依赖的 Python 环境运行：
 
 ```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python train_sft.py
 ```
 
@@ -41,7 +42,9 @@ python train_sft.py --config configs/development/sft.yaml
 
 首次运行会下载模型和数据；已有完整缓存时，可在命令前加 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 离线运行。
 
-训练配置面向用户租用的 **32 GB 显存 GPU**。默认训练 3 轮，学习率 `2e-5`，每批 2 条、梯度累积 8 次，单卡有效批量为 16 条。1.7B 模型的权重、梯度和 AdamW 状态占用更多显存，因此启用非重入梯度检查点，并使用融合 AdamW，避免默认 foreach 实现额外的整组参数中间量。CUDA 支持 BF16 时自动使用 BF16 混合精度，模型权重保持 FP32。具体 GPU 型号尚未确定，实际训练显存仍需在训练机上验证。
+训练配置面向用户租用的 **32 GB 显存 GPU**。默认训练 3 轮，学习率 `2e-5`，每批 1 条、梯度累积 16 次，单卡有效批量为 16 条。1.7B 模型的权重、梯度和 AdamW 状态占用更多显存，因此启用非重入梯度检查点，并使用融合 AdamW，避免默认 foreach 实现额外的整组参数中间量。CUDA 支持 BF16 时自动使用 BF16 混合精度，模型权重保持 FP32。启动时会打印实际批量、累积次数、BF16 和梯度检查点开关，便于核对机器环境。
+
+AutoDL 的 NVIDIA vGPU-32GB 实测显示此前每批 2 条会在反向传播时显存不足，因此将微批量降为 1，并增加累积次数。上面的分配器环境变量用于缓解变长样本带来的显存碎片，需在启动 Python 前设置。新配置的峰值显存仍需在训练机上实测。
 
 训练损失每 10 个优化器更新步骤显示一次。每轮保存检查点，保留最近两个；完整训练结束后，模型和分词器保存在 `outputs/training/qwen3-1.7b-gsm8k-sft/final/`，训练汇总保存在同一运行目录下的 `train_results.json`。新输出目录与原有 0.6B 检查点分开。程序只使用训练集，不自动评测。
 
@@ -58,6 +61,16 @@ python train_sft.py --resume-from-checkpoint outputs/training/qwen3-1.7b-gsm8k-s
 ```
 
 续训时使用初次训练的模型、配置文件及参数；如果初次使用了自定义 `--output-dir`，续训时也指定同一路径。开发机续训也需传入 `--config configs/development/sft.yaml`。
+
+若沿用旧配置运行后 OOM，可直接用命令行覆盖重试，并使用新目录保留失败日志：
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python train_sft.py \
+  --batch-size 1 --gradient-accumulation-steps 16 \
+  --output-dir outputs/training/qwen3-1.7b-gsm8k-sft-bs1
+```
+
+按当前每轮保存策略，第一轮结束前失败的训练尚未产生检查点，需从头重试。若重试目录已有内容，再选择新目录；从实际存在的检查点恢复时才使用 `--resume-from-checkpoint`。
 
 ## TensorBoard 训练指标
 
@@ -138,3 +151,4 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /home/yunli/miniconda3/bin/python prepare
 - [Transformers TensorBoard 回调](https://huggingface.co/docs/transformers/main_classes/callback#transformers.integrations.TensorBoardCallback)
 - [TensorBoard 查看日志](https://www.tensorflow.org/tensorboard/get_started)
 - [Brotli 1.2.0 的解压接口变更](https://github.com/google/brotli/releases/tag/v1.2.0)
+- [PyTorch CUDA 显存分配设置](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)

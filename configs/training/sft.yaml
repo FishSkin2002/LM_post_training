@@ -3,8 +3,8 @@ model_name: Qwen/Qwen3-1.7B
 output_dir: outputs/training/qwen3-1.7b-gsm8k-sft
 num_train_epochs: 3
 learning_rate: 0.00002
-per_device_train_batch_size: 2
-gradient_accumulation_steps: 8
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
 optim: adamw_torch_fused
 bf16: auto
 gradient_checkpointing: true

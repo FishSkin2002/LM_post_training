@@ -1,5 +1,14 @@
 # 进展记录
 
+## 2026-10-27：按 AutoDL 实测降低训练显存
+
+- 用户提供完整重试日志：Brotli 问题已排除，1.7B 权重下载和 7473 条训练样本处理成功，最长 550 tokens；第 10 次更新后在反向传播中 OOM。
+- CUDA 报告总容量 31.60 GiB、进程使用 31.20 GiB，其中 PyTorch 已分配 27.33 GiB、保留未分配 3.56 GiB；申请 464 MiB 时仅余 408.12 MiB。退出后 nvidia-smi 显示显存释放、没有运行进程。
+- 已确认 PR #5 合并，通过受控入口从最新 origin/main（4402cba）创建 `codex/reduce-sft-training-memory`。本轮缩小微批量并补充日志所建议的分配器选项，保持有效批量和训练算法。
+- 训练机默认改为每批 1 条、累积 16 次；启动日志增加实际批量、累积、BF16 与梯度检查点开关。开发机配置、模型、FP32 权重及融合 AdamW 保持原有设置。
+- README 在标准启动命令中添加 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`，并提供无需更新代码即可覆盖批量的重试命令；使用新输出目录保留旧日志。第 10 步失败尚未到第一轮保存检查点，重试需从头开始。
+- 本机 PyTorch 2.6 接受该分配器选项。CPU 随机微型 Qwen3 配合 8～550 tokens 的合成变长样本完成 20 次更新，参数和 TensorBoard 第 1、10、20 步指标均有限；有效批量、开发机配置保留、编译及差异检查通过。该验证不测量真实 1.7B 的 GPU 峰值显存，仍需用户在训练机重试。
+
 ## 2026-10-27：修复训练机下载解压依赖
 
 - 用户在 AutoDL 的 Python 3.12/base 环境运行训练，下载 Qwen3-1.7B 的 tokenizer_config.json 时由 HTTPX2 Brotli 解压触发 `TypeError: process() takes no keyword arguments`；尚未进入训练。

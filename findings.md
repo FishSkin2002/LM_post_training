@@ -3,7 +3,7 @@
 ## 默认训练环境
 
 - 用户于 2026-10-27 确定长期模型默认：**训练机使用 Qwen3-1.7B，开发机使用 Qwen3-0.6B**。后续为某台机器准备训练或验证配置时沿用其默认；用户显式指定其他模型时使用指定值。可执行模型名称保存在对应机器的 YAML 中。
-- 用户于 2026-10-26 明确：实际训练使用租用的 **32 GB 显存 GPU**，后续默认训练配置均按这一环境准备。GPU 型号和远端软件版本尚未提供，不作假定。
+- 用户于 2026-10-26 明确：实际训练使用租用的 **32 GB 显存 GPU**，后续默认训练配置均按这一环境准备。2026-10-27 日志显示设备名为 NVIDIA vGPU-32GB，nvidia-smi 总显存 32760 MiB、驱动 550.120、驱动支持 CUDA 12.4；CUDA OOM 报告可用总容量 31.60 GiB。底层物理 GPU 型号和 BF16 支持状态仍未确认，不能由 vGPU 名称推断。
 - 本机环境只用于当前代码和数据验证，不能用本机显存容量替代上述训练环境。
 - 配置统一放在 `configs/`：`common.yaml` 存放共享精度、数据和模板设置；`development/sft.yaml` 与 `training/sft.yaml` 分别存放各机器的模型名称和训练参数。选择或调整模型时读取对应机器的 YAML，参数值以该文件为准。
 - `train_sft.py` 默认读取训练机配置；`prepare_sft_data.py` 默认读取开发机配置。两者都可用 `--config` 显式选择机器配置，并使用所选模型的分词器；训练入口还用同一模型名称加载权重。两套输出目录分开，训练机的新目录还与原有 0.6B 检查点分开。
@@ -43,6 +43,10 @@
 
 ## SFT 训练代码验证
 
+- 2026-10-27 训练机首次实际运行：1.7B 分词器处理 7473 条 GSM8K 训练样本，最长 550 tokens；预训练权重下载并载入成功。原微批量 2、累积 8 配置完成 10 次更新后在反向传播 OOM，不能继续把该配置视为已适配此训练机。
+- OOM 日志显示进程占用 31.20 GiB，PyTorch 分配 27.33 GiB、保留未分配 3.56 GiB，申请 464 MiB 时只剩 408.12 MiB。显存余量不足，同时存在较大的保留空间；保留量本身不足以证明全部问题都来自碎片。退出后 GPU 没有运行进程，显存已释放。
+- 因该实测结果，训练机默认改为微批量 1、累积 16，保持单卡有效批量 16、FP32 权重和融合 AdamW。启动命令设置 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`，用于缓解变长样本反复分配造成的碎片；参数适用性已在本机 PyTorch 2.6 的头文件和 [官方 CUDA 分配器说明](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf) 核对。此选项不会缩减权重或优化器状态，最终能否完成训练仍需训练机实测。
+- 已验证本机 PyTorch 2.6 分配器接受该选项；新机器配置构造 TrainingArguments 后，CPU 随机微型 Qwen3 对长度 8～550 的变长合成样本完成 20 次更新，参数及 TensorBoard 指标均有限。开发机配置文件未改。上述检查验证配置和代码集成，不能作为实际训练机不再 OOM 的证据。
 - 默认使用 Transformers Trainer 做全参数 SFT。2026-10-27 将训练机切换至 1.7B 后，减小微批量、增加梯度累积以保持单卡有效批量 16；启用非重入梯度检查点，优化器改为融合 AdamW。权重保持 FP32，GPU 支持时使用 BF16 混合精度，学习率和训练轮数保持此前设置，尚无评测结果支持另行调优。
 - 本机 PyTorch 2.6 的 AdamW 在 CUDA 上默认可能使用 foreach，源码文档说明这会增加约一整组参数大小的峰值中间量；融合实现直接调用 `_fused_adamw_`，避免这项开销。约 1.7B 参数的 FP32 权重、梯度和两组 Adam 状态本身就需约 27 GB（十进制），还需留出混合精度副本、激活和运行时空间。上述设置是面向 32 GB 的起始配置，不能替代训练机实测。
 - 模型与非思考模板核对来源：[Qwen 官方 Qwen3-1.7B 模型卡](https://huggingface.co/Qwen/Qwen3-1.7B)。优化器实现核对本机固定依赖的 `torch/optim/adamw.py` 与 `torch/optim/optimizer.py`；官方模型卡没有承诺本项目训练配置的显存用量。
@@ -65,6 +69,7 @@
 - 本机 HTTPX2 2.16.0 源码同样调用该参数；其发行元数据声明 CPython 的 Brotli 可选依赖为 `brotli>=1.2.0`。本机目前没有 Google Brotli，使用的是 brotlicffi 回退，因此此前离线模型缓存验证没有覆盖训练机这次下载错误。
 - [Brotli 1.2.0 官方发布说明](https://github.com/google/brotli/releases/tag/v1.2.0) 确认 `Decompressor.process` 新增 `output_buffer_limit`；[Brotli 1.2.1 官方版本](https://github.com/google/brotli/releases/tag/v1.2.1) 也已发布。修复方向是在训练所用解释器中安装兼容 Brotli，无须改变模型或删除缓存。
 - 项目依赖现固定 Brotli 1.2.1。仅在 /tmp 安装并验证其与本机 HTTPX2 2.16.0 的关键字接口、BrotliDecoder 和响应 `iter_bytes()`；小型 JSON 与 5.12 MB 数据的分块压缩/解压往返均通过。该验证覆盖报错的解压链路，不代表训练机实际安装结果或完整模型下载已经成功。
+- 随后用户重试日志确认分词器、数据集和 1.7B 权重均已下载并进入训练，说明该次下载阻塞已解除；新的故障为上面的 GPU OOM。
 
 ## Git 权限核查
 
