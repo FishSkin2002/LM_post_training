@@ -1,4 +1,3 @@
-model_name: Qwen/Qwen3-0.6B
 model_dtype: float32
 attention_implementation: sdpa
 dataset:

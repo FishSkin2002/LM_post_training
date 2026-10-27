@@ -1,4 +1,5 @@
 # 本机开发环境：8 GB 显存。仅显式选择此文件时使用。
+model_name: Qwen/Qwen3-0.6B
 output_dir: outputs/development/gsm8k-sft
 num_train_epochs: 3
 learning_rate: 0.00002
