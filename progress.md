@@ -1,5 +1,15 @@
 # 进展记录
 
+## 2026-10-27：查看训练后 checkpoint 的回答
+
+- 用户在 1.7B 再次 OOM 后改用 0.6B 进行新训练，现已下载 checkpoint，要求抽取几道数据集问题查看问答表现。
+- 已找到 `outputs/development/gsm8k-sft/checkpoint-1404`；配置 hidden_size=1024、28 层，与 Qwen3-0.6B 一致，完整模型权重约 2.38 GB。目录包含 tokenizer.json、tokenizer_config.json 和 chat_template.jinja，可直接本地加载。
+- 已确认 PR #6 合并，通过受控入口从最新 origin/main（83c45ba）创建 `codex/checkpoint-sample-qa`。本轮只实现并运行少量问答，不启动训练或完整评测。
+- 已新增 sample_checkpoint.py：显式选择本地目录，默认 test/5 题/seed 42，使用与训练一致的非思考模板和逐步取最高概率词元的生成方式；支持 train、样本数量、种子、长度、设备和可选 Markdown 报告。报告同时显示参考解答和是否触及生成长度上限。
+- 本地分词器已验证能读取独立的 chat_template.jinja，并生成与训练一致的空 think 前缀；帮助、编译与差异检查通过。真实模型推理已通过正式宿主授权启动，离线读取已有缓存并使用 CUDA，不训练模型。
+- 已用 CUDA/BF16 加载实际 checkpoint，对 test 索引 `[1309, 228, 51, 563, 501]` 完成问答，均生成结束标记且未达到长度上限。原始问答报告保存为 `outputs/samples/checkpoint-1404-test-seed42.md`，模型及报告均保留在忽略的 outputs/ 下。
+- 用户最新要求自行看答案；已删除临时加入的人工点评，仅保留问题、模型回答和数据集参考解答。本轮不追加运行，最终提供脚本、运行命令和原始报告。
+
 ## 2026-10-27：按 AutoDL 实测降低训练显存
 
 - 用户提供完整重试日志：Brotli 问题已排除，1.7B 权重下载和 7473 条训练样本处理成功，最长 550 tokens；第 10 次更新后在反向传播中 OOM。
