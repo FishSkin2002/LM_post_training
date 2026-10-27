@@ -102,6 +102,13 @@ def main():
     training_args = make_training_args(args)
     print(f"Training configuration: {args.config}", flush=True)
     print(f"Model: {args.model_name}", flush=True)
+    print(
+        f"Batch size: {training_args.per_device_train_batch_size} | "
+        f"Gradient accumulation: {training_args.gradient_accumulation_steps} | "
+        f"BF16: {training_args.bf16} | "
+        f"Gradient checkpointing: {training_args.gradient_checkpointing}",
+        flush=True,
+    )
     set_seed(training_args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     tokenizer.padding_side = COMMON_CONFIG["padding_side"]
