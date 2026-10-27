@@ -1,14 +1,16 @@
-"""Sample GSM8K questions and inspect answers from a local SFT checkpoint."""
+"""Sample GSM8K answers from an original model or a local SFT checkpoint."""
 
 import argparse
 from pathlib import Path
 import random
+import re
 
 import torch
 from datasets import disable_progress_bars, load_dataset
 from datasets.utils import logging as datasets_logging
-from transformers import AutoTokenizer, set_seed
+from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 from transformers.utils import logging as transformers_logging
+from transformers.utils.hub import resolve_revision
 
 from prepare_sft_data import COMMON_CONFIG
 from sft_runtime import load_checkpoint_model
@@ -16,7 +18,14 @@ from sft_runtime import load_checkpoint_model
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--checkpoint", type=Path, help="Local full-model or LoRA adapter directory.")
+    source.add_argument("--model-name", help="Original model repository, e.g. Qwen/Qwen3-4B.")
+    parser.add_argument("--revision", help="Original model branch, tag or commit; requires --model-name.")
+    parser.add_argument(
+        "--local-files-only", action="store_true",
+        help="Load the original model only from local cache; checkpoints always load locally.",
+    )
     parser.add_argument("--split", choices=("test", "train"), default="test")
     parser.add_argument("--num-samples", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
@@ -27,12 +36,21 @@ def parse_args():
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     parser.add_argument(
         "--output", type=Path,
-        help="Markdown report path (default: outputs/samples/<checkpoint>-<split>-seed<seed>.md).",
+        help="Markdown report path (default: outputs/samples/<source>-<split>-seed<seed>.md).",
     )
     args = parser.parse_args()
-    args.checkpoint = args.checkpoint.expanduser().resolve()
-    if not any((args.checkpoint / name).is_file() for name in ("config.json", "adapter_config.json")):
-        parser.error("Checkpoint must contain config.json or adapter_config.json.")
+    if args.checkpoint is not None:
+        args.checkpoint = args.checkpoint.expanduser().resolve()
+        if not any((args.checkpoint / name).is_file() for name in ("config.json", "adapter_config.json")):
+            parser.error("Checkpoint must contain config.json or adapter_config.json.")
+        if args.revision is not None:
+            parser.error("--revision requires --model-name; adapters use their saved base revision.")
+        source_name = args.checkpoint.name
+    else:
+        args.model_name = args.model_name.strip()
+        if not args.model_name:
+            parser.error("--model-name must be nonempty.")
+        source_name = "original-" + re.sub(r"[^A-Za-z0-9._-]+", "--", args.model_name).strip(".-")
     if args.num_samples <= 0 or args.max_new_tokens <= 0:
         parser.error("Sample count and max-new-tokens must be positive.")
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -40,7 +58,7 @@ def parse_args():
     if args.output is None:
         args.output = (
             Path(__file__).resolve().parent / "outputs" / "samples"
-            / f"{args.checkpoint.name}-{args.split}-seed{args.seed}.md"
+            / f"{source_name}-{args.split}-seed{args.seed}.md"
         )
     args.output = args.output.expanduser().resolve()
     return args, parser
@@ -102,24 +120,39 @@ def main():
     dtype = torch.float32
     if device == "cuda":
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    set_seed(args.seed)
-    tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, local_files_only=True)
+    if args.model_name is not None:
+        resolved = resolve_revision(
+            args.model_name, args.revision, local_files_only=args.local_files_only,
+        )
+        revision = getattr(resolved, "resolved", resolved)
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name, revision=revision, local_files_only=args.local_files_only,
+            dtype=dtype, attn_implementation=COMMON_CONFIG["attention_implementation"],
+        ).to(device)
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model_name, revision=revision, local_files_only=args.local_files_only,
+        )
+        title = "原始模型样本问答"
+        source_description = f"- 原始模型：`{args.model_name}`\n- Revision：`{revision or 'default'}`\n"
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, local_files_only=True)
+        model = load_checkpoint_model(
+            args.checkpoint, dtype=dtype, device=device,
+            attention_implementation=COMMON_CONFIG["attention_implementation"],
+        )
+        title = "Checkpoint 样本问答"
+        source_description = f"- Checkpoint：`{args.checkpoint}`\n"
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = load_checkpoint_model(
-        args.checkpoint,
-        dtype=dtype,
-        device=device,
-        attention_implementation=COMMON_CONFIG["attention_implementation"],
-    )
     model.eval()
     model.config.use_cache = True
+    # Model/adapter initialization must not consume the generation seed.
+    set_seed(args.seed)
 
     generation_config = {**COMMON_CONFIG["generation"], "max_new_tokens": args.max_new_tokens}
     report = [
-        "# Checkpoint 样本问答\n",
-        f"- Checkpoint：`{args.checkpoint}`\n"
-        f"- 数据集：`{dataset_config['path']}/{dataset_config['name']}`，split：`{args.split}`\n"
+        f"# {title}\n",
+        source_description + f"- 数据集：`{dataset_config['path']}/{dataset_config['name']}`，split：`{args.split}`\n"
         f"- 种子：{args.seed}；样本索引：{indices}\n"
         f"- 设备：`{device}`；推理精度：`{dtype}`\n"
         f"- enable_thinking：`{COMMON_CONFIG['enable_thinking']}`；生成设置：`{generation_config}`\n"

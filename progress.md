@@ -1,5 +1,14 @@
 # 进展记录
 
+## 2026-10-28：支持原始 Qwen3 抽样
+
+- 用户要求 sample_checkpoint.py 同样支持微调前的原始 Qwen3。新增 --model-name 与 --checkpoint 互斥选择，沿用既定思考采样设置、抽题种子与报告输出，保持训练代码和已有产物不变。
+- 已确认 PR #11 合入主线，通过受控入口从最新 origin/main（51edbc9）创建 codex/sample-original-qwen3；当前解释器已安装 PEFT 0.21.0。
+- 当前抽样入口强制本地模型/适配器目录，且所有加载 local_files_only=True。新增原始模型入口需允许正常缓存/下载，并提供显式仅缓存和 revision 选择；本机只做随机微型模型离线验证。
+- 已实现 --model-name / --checkpoint 互斥来源，以及原始模型的 --revision / --local-files-only；原始报告命名与 checkpoint 分开并记录来源。将生成种子设置放到加载之后，使初始化过程不影响对照随机状态。
+- 三组离线测试已通过：随机微型模型的原始/完整/零增量适配器生成和抽题一致，默认/自定义报告与重复生成，下载/缓存标志和 revision 传递，以及无效参数提前拒绝。模型仓库加载由本地随机权重替代，未下载或加载预训练权重。
+- 本机 Transformers 5.20.2 已弃用 config._commit_hash，新增入口改用当前 resolve_revision / ResolvedRevision.resolved，固定模型与分词器版本；用实际 ResolvedRevision 类型替代测试中的旧字段假设，三组新测试再次通过。
+- 旧 LoRA / 全参数集成回归四组通过（可选 CUDA 检查未启用），帮助、编译及差异检查通过。README 已补充原始模型、缓存、版本及对照用法；本轮未运行真实预训练模型问答，准备提交并创建 PR。
 ## 2026-10-27：接入两机 LoRA SFT
 
 - 用户确认全部推荐后开始实施：PEFT + 现有 Trainer，两机默认 LoRA，开发机 0.6B、训练机 4B，新增 8B 可选配置，保留 full 模式；Qwen3 思考格式和完整助手监督保持。
