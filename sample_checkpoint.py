@@ -7,10 +7,11 @@ import random
 import torch
 from datasets import disable_progress_bars, load_dataset
 from datasets.utils import logging as datasets_logging
-from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+from transformers import AutoTokenizer, set_seed
 from transformers.utils import logging as transformers_logging
 
 from prepare_sft_data import COMMON_CONFIG
+from sft_runtime import load_checkpoint_model
 
 
 def parse_args():
@@ -30,8 +31,8 @@ def parse_args():
     )
     args = parser.parse_args()
     args.checkpoint = args.checkpoint.expanduser().resolve()
-    if not (args.checkpoint / "config.json").is_file():
-        parser.error("Checkpoint must be a local model directory containing config.json.")
+    if not any((args.checkpoint / name).is_file() for name in ("config.json", "adapter_config.json")):
+        parser.error("Checkpoint must contain config.json or adapter_config.json.")
     if args.num_samples <= 0 or args.max_new_tokens <= 0:
         parser.error("Sample count and max-new-tokens must be positive.")
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -105,12 +106,12 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, local_files_only=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(
+    model = load_checkpoint_model(
         args.checkpoint,
-        local_files_only=True,
         dtype=dtype,
-        attn_implementation=COMMON_CONFIG["attention_implementation"],
-    ).to(device)
+        device=device,
+        attention_implementation=COMMON_CONFIG["attention_implementation"],
+    )
     model.eval()
     model.config.use_cache = True
 
