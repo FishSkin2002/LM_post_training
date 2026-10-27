@@ -5,8 +5,10 @@ from pathlib import Path
 import random
 
 import torch
-from datasets import load_dataset
+from datasets import disable_progress_bars, load_dataset
+from datasets.utils import logging as datasets_logging
 from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+from transformers.utils import logging as transformers_logging
 
 from prepare_sft_data import COMMON_CONFIG
 
@@ -19,7 +21,10 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
-    parser.add_argument("--output", type=Path, help="Optional Markdown report path.")
+    parser.add_argument(
+        "--output", type=Path,
+        help="Markdown report path (default: outputs/samples/<checkpoint>-<split>-seed<seed>.md).",
+    )
     args = parser.parse_args()
     args.checkpoint = args.checkpoint.expanduser().resolve()
     if not (args.checkpoint / "config.json").is_file():
@@ -28,6 +33,12 @@ def parse_args():
         parser.error("Sample count and max-new-tokens must be positive.")
     if args.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA is unavailable; use --device cpu or --device auto.")
+    if args.output is None:
+        args.output = (
+            Path(__file__).resolve().parent / "outputs" / "samples"
+            / f"{args.checkpoint.name}-{args.split}-seed{args.seed}.md"
+        )
+    args.output = args.output.expanduser().resolve()
     return args, parser
 
 
@@ -60,6 +71,10 @@ def generate_answer(model, tokenizer, question, max_new_tokens):
 
 def main():
     args, parser = parse_args()
+    disable_progress_bars()
+    datasets_logging.set_verbosity_error()
+    transformers_logging.disable_progress_bar()
+    transformers_logging.set_verbosity_error()
     dataset_config = {**COMMON_CONFIG["dataset"], "split": args.split}
     dataset = load_dataset(**dataset_config)
     if args.num_samples > len(dataset):
@@ -71,8 +86,6 @@ def main():
     dtype = torch.float32
     if device == "cuda":
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    print(f"Checkpoint: {args.checkpoint} | Device: {device} | Dtype: {dtype}", flush=True)
-    print(f"Dataset: {dataset_config} | Indices: {indices}", flush=True)
     set_seed(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, local_files_only=True)
     if tokenizer.pad_token_id is None:
@@ -108,12 +121,10 @@ def main():
             f"生成 {token_count} tokens；{status}。\n\n"
             f"### 数据集参考解答\n\n{row['answer']}\n"
         )
-        print(f"\n{section}", flush=True)
         report.append(section)
-    if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text("\n".join(report), encoding="utf-8")
-        print(f"Saved report to {args.output.resolve()}", flush=True)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text("\n".join(report), encoding="utf-8")
+    print(f"Saved report to {args.output}", flush=True)
 
 
 if __name__ == "__main__":
