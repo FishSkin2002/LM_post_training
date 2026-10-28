@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+import re
 
 import yaml
 from datasets import load_dataset
@@ -10,13 +11,24 @@ from transformers import AutoTokenizer
 
 CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 IGNORE_INDEX = -100
-CHAT_TEMPLATE = (
-    "{% for message in messages %}"
-    "{{ '<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' }}"
-    "{% if not loop.last or add_generation_prompt %}{{ '\\n' }}{% endif %}"
-    "{% endfor %}"
-    "{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}"
+PROMPT = (
+    "Solve the following math problem step by step.\n"
+    "On the last line, write only #### followed by the final numeric answer, without units or other text. "
+    "For example, if the final answer is 4, write #### 4.\n"
+    "Use #### only once in your response. Do not write anything after the final answer.\n\n"
+    "Question: {question}\nAnswer:\n"
 )
+CALCULATOR_ANNOTATION = re.compile(r"<<[^<>]*>>")
+TEXT_FORMAT = {"prompt": PROMPT, "answer_cleanup": CALCULATOR_ANNOTATION.pattern,
+               "eos_token": "<|endoftext|>"}
+
+
+def build_prompt(question):
+    return PROMPT.format(question=question)
+
+
+def clean_answer(answer):
+    return CALCULATOR_ANNOTATION.sub("", answer)
 
 
 def require_base_model(model_name):
@@ -32,23 +44,20 @@ def load_config(path):
 
 def load_tokenizer(source, *, local_files_only=False):
     tokenizer = AutoTokenizer.from_pretrained(source, local_files_only=local_files_only)
-    tokenizer.chat_template = CHAT_TEMPLATE
+    tokenizer.chat_template = None
+    if tokenizer.eos_token != TEXT_FORMAT["eos_token"]:
+        raise ValueError("The Base tokenizer must use <|endoftext|> as its EOS token.")
     return tokenizer
 
 
 def build_sft_example(tokenizer, question, answer):
-    messages = [{"role": "user", "content": question}]
-    prompt_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_dict=False)
-    input_ids = tokenizer.apply_chat_template(
-        messages + [{"role": "assistant", "content": answer}],
-        add_generation_prompt=False, return_dict=False,
-    )
-    if input_ids[:len(prompt_ids)] != prompt_ids:
-        raise ValueError("The question prompt must be an exact token prefix of the training example.")
+    prompt_ids = tokenizer.encode(build_prompt(question), add_special_tokens=False)
+    answer_ids = tokenizer.encode(clean_answer(answer), add_special_tokens=False) + [tokenizer.eos_token_id]
+    input_ids = prompt_ids + answer_ids
     return {
         "input_ids": input_ids,
         "attention_mask": [1] * len(input_ids),
-        "labels": [IGNORE_INDEX] * len(prompt_ids) + input_ids[len(prompt_ids):],
+        "labels": [IGNORE_INDEX] * len(prompt_ids) + answer_ids,
     }
 
 

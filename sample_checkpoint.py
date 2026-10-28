@@ -7,28 +7,25 @@ import re
 
 import torch
 from datasets import disable_progress_bars, load_dataset
-from peft import PeftConfig, PeftModel
+from peft import PeftModel
 from transformers import AutoModelForCausalLM
 from transformers.utils import logging
 from tqdm.auto import tqdm
 
-from prepare_sft_data import load_tokenizer, require_base_model
+from prepare_sft_data import build_prompt, clean_answer, load_tokenizer, require_base_model
+from training_workflow import read_source
 
 
 @torch.inference_mode()
 def generate_answer(model, tokenizer, question, max_new_tokens):
-    inputs = tokenizer.apply_chat_template(
-        [{"role": "user", "content": question}], add_generation_prompt=True,
-        return_dict=True, return_tensors="pt",
-    ).to(model.device)
+    inputs = tokenizer(build_prompt(question), add_special_tokens=False, return_tensors="pt").to(model.device)
     if inputs["input_ids"].shape[-1] + max_new_tokens > model.config.max_position_embeddings:
         raise ValueError("Question and output budget exceed the model context; reduce --max-new-tokens.")
-    stop_ids = list({tokenizer.convert_tokens_to_ids("<|im_end|>"), tokenizer.eos_token_id})
     output = model.generate(
         **inputs, max_new_tokens=max_new_tokens, do_sample=False,
-        eos_token_id=stop_ids, pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id,
     )[0, inputs["input_ids"].shape[-1]:].tolist()
-    truncated = len(output) >= max_new_tokens and output[-1] not in stop_ids
+    truncated = len(output) >= max_new_tokens and output[-1] != tokenizer.eos_token_id
     return tokenizer.decode(output, skip_special_tokens=True), len(output), truncated
 
 
@@ -47,19 +44,16 @@ def main():
     args = parser.parse_args()
     if min(args.num_samples, args.max_new_tokens) <= 0:
         parser.error("num-samples and max-new-tokens must be positive.")
-    if args.checkpoint:
-        args.checkpoint = args.checkpoint.expanduser().resolve()
-        if not (args.checkpoint / "adapter_config.json").is_file():
-            parser.error("Checkpoint must contain a Base LoRA adapter_config.json.")
-        saved = PeftConfig.from_pretrained(args.checkpoint, local_files_only=True)
-        model_name = saved.base_model_name_or_path
-        label = f"lora-{args.checkpoint.parent.name}-{args.checkpoint.name}"
-    else:
-        model_name = args.model_name
-        label = f"base-{model_name}"
     try:
+        if args.checkpoint:
+            args.checkpoint, metadata, _ = read_source(args.checkpoint)
+            model_name = metadata["config"]["model_name"]
+            label = f"lora-{args.checkpoint.parent.name}-{args.checkpoint.name}"
+        else:
+            model_name = args.model_name
+            label = f"base-{model_name}"
         require_base_model(model_name)
-    except ValueError as error:
+    except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
     disable_progress_bars()
     logging.disable_progress_bar()
@@ -91,7 +85,7 @@ def main():
         report.append(
             f"## 样本 {index}\n\n### 问题\n\n{row['question']}\n\n"
             f"### 模型回答\n\n{answer}\n\n生成 {count} tokens；{status}。\n\n"
-            f"### 数据集标准解答\n\n{row['answer']}\n"
+            f"### 数据集标准解答（已去除计算器注释）\n\n{clean_answer(row['answer'])}\n"
         )
     label = re.sub(r"[^A-Za-z0-9._-]+", "--", label)
     output = args.output or (Path(__file__).resolve().parent / "outputs/samples"
