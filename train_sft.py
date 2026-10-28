@@ -12,6 +12,7 @@ from transformers import AutoModelForCausalLM, DataCollatorForSeq2Seq, TrainingA
 from transformers.integrations import TensorBoardCallback
 
 from prepare_sft_data import CONFIG_DIR, build_sft_example, load_config, load_tokenizer
+from evaluate_checkpoint import evaluate_checkpoint
 from training_workflow import WorkflowTrainer, data_plan, new_run, read_source, reserve_directory, save_run
 
 
@@ -59,12 +60,12 @@ def main():
     tokenizer = load_tokenizer(source_path or model_name, local_files_only=bool(source_path))
     validation = dataset.select(plan["validation_indices"])
 
-    def tokenize(rows):
+    def tokenize(rows, description):
         return rows.map(lambda row: build_sft_example(tokenizer, row["question"], row["answer"]),
-                        remove_columns=rows.column_names)
+                        remove_columns=rows.column_names, desc=description)
 
-    train_dataset = tokenize(dataset.select(plan["train_indices"]))
-    eval_dataset = tokenize(validation)
+    train_dataset = tokenize(dataset.select(plan["train_indices"]), "Tokenize training split")
+    eval_dataset = tokenize(validation, "Tokenize validation split")
     model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float32)
     if source_path:
         model = PeftModel.from_pretrained(model, source_path, is_trainable=True, local_files_only=True)
@@ -78,7 +79,7 @@ def main():
         model=model, args=training_args, train_dataset=train_dataset, eval_dataset=eval_dataset,
         data_collator=DataCollatorForSeq2Seq(tokenizer, label_pad_token_id=-100),
         processing_class=tokenizer, callbacks=[TensorBoardCallback(tb_writer=writer)],
-        run_metadata=metadata, validation_rows=validation,
+        run_metadata=metadata,
     )
     try:
         result = trainer.train(resume_from_checkpoint=source_path if args.resume_from_checkpoint else None)
@@ -88,9 +89,11 @@ def main():
         trainer.save_model(final_dir)
         tokenizer.save_pretrained(final_dir)
         trainer.save_state()
+        print(f"Training complete. Saved adapter and tokenizer to {final_dir}", flush=True)
+        evaluate_checkpoint(final_dir, model=trainer.model, tokenizer=tokenizer, dataset=dataset,
+                            disable_tqdm=training_args.disable_tqdm)
     finally:
         writer.close()
-    print(f"Saved adapter and tokenizer to {final_dir}", flush=True)
 
 
 if __name__ == "__main__":

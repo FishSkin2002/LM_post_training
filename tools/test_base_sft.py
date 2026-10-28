@@ -28,6 +28,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import prepare_sft_data as data
+import evaluate_checkpoint as evaluation
 import sample_checkpoint
 import train_sft
 import training_workflow as workflow
@@ -65,8 +66,7 @@ class BaseSFTTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.enterContext(patch.object(workflow, "GENERATION_SAMPLES", 1))
-        self.enterContext(patch.object(workflow, "GENERATION_MAX_NEW_TOKENS", 4))
+        self.enterContext(patch.object(evaluation, "MAX_NEW_TOKENS", 4))
         self.base = self.root / "tiny-base"
         self.model_name = "Qwen/Qwen3-0.6B-Base"
         words = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "<unk>",
@@ -127,10 +127,27 @@ class BaseSFTTests(unittest.TestCase):
                 patch.object(AutoModelForCausalLM, "from_pretrained", side_effect=self.load_model), \
                 patch.object(AutoTokenizer, "from_pretrained", side_effect=self.load_tokenizer), \
                 patch.object(train_sft, "load_dataset", return_value=Dataset.from_list(self.training_rows)), \
-                patch.object(train_sft, "WorkflowTrainer", trainer), contextlib.redirect_stdout(io.StringIO()) as terminal:
+                patch.object(train_sft, "WorkflowTrainer", trainer), \
+                contextlib.redirect_stdout(io.StringIO()) as terminal, \
+                contextlib.redirect_stderr(io.StringIO()) as progress:
             train_sft.main()
+        self.last_terminal, self.last_progress = terminal.getvalue(), progress.getvalue()
         line = next(line for line in terminal.getvalue().splitlines() if line.startswith("Output directory: "))
         return Path(line.removeprefix("Output directory: "))
+
+    def evaluate(self, checkpoint, num_samples=None, rows=None):
+        output = self.root / f"evaluation-{checkpoint.name}-{num_samples}.json"
+        argv = ["evaluate_checkpoint.py", "--checkpoint", str(checkpoint), "--device", "cpu", "--output", str(output)]
+        if num_samples is not None:
+            argv += ["--num-samples", str(num_samples)]
+        with patch.object(sys, "argv", argv), \
+                patch.object(AutoModelForCausalLM, "from_pretrained", side_effect=self.load_model), \
+                patch.object(AutoTokenizer, "from_pretrained", side_effect=self.load_tokenizer), \
+                patch.object(evaluation, "load_dataset", return_value=Dataset.from_list(self.training_rows if rows is None else rows)), \
+                patch.object(torch.optim, "AdamW", side_effect=AssertionError("Evaluation must not create an optimizer.")), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            evaluation.main()
+        return json.loads(output.read_text())
 
     def sample(self, *source):
         output = self.root / f"report-{len(list(self.root.glob('report-*.md')))}.md"
@@ -204,11 +221,11 @@ class BaseSFTTests(unittest.TestCase):
     def test_strict_numeric_scores_and_atomic_run_names(self):
         for text, expected in (("reason\n#### -1,234.00", "-1234"), ("#### 5.0", "5"),
                                ("#### +0.005", "0.005")):
-            self.assertEqual(workflow.answer_number(text), workflow.Decimal(expected))
+            self.assertEqual(evaluation.answer_number(text), evaluation.Decimal(expected))
         for text in ("5", "#### 1,23", "#### NaN", "#### Infinity", "#### 5 units",
                      "#### 1 #### 5", "#### 1e3", "####"):
-            self.assertIsNone(workflow.answer_number(text), text)
-        scores = workflow.answer_metrics([(True, True, False), (False, True, True), (False, False, False)])
+            self.assertIsNone(evaluation.answer_number(text), text)
+        scores = evaluation.answer_metrics([(True, True, False), (False, True, True), (False, False, False)])
         self.assertEqual(scores["answer_accuracy"], 1 / 3)
         self.assertEqual(scores["answer_format_rate"], 2 / 3)
         self.assertEqual(scores["generation_truncation_rate"], 1 / 3)
@@ -244,6 +261,9 @@ class BaseSFTTests(unittest.TestCase):
             workflow.read_source(checkpoint, changed, resume=True)
         _, metadata, step = workflow.read_source(checkpoint, self.config, resume=True)
         self.assertEqual(step, 2)
+        metadata["generation"] = {"samples": 128, "max_new_tokens": 1024}
+        workflow.save_run(checkpoint, metadata)
+        self.assertEqual(workflow.read_source(checkpoint, self.config, resume=True)[2], 2)
         with self.assertRaisesRegex(ValueError, "data or validation split"):
             workflow.data_plan(Dataset.from_list(self.training_rows[1:]), metadata)
         with patch.object(AutoModelForCausalLM, "from_pretrained", side_effect=AssertionError("Must fail before weights.")):
@@ -251,22 +271,27 @@ class BaseSFTTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.run_training("guard", resume=checkpoint)
 
-    def test_tensorboard_resume_purges_stale_tail_and_keeps_validation_denominators(self):
+    def test_tensorboard_resume_purges_stale_tail_and_records_loss_only(self):
         with self.assertRaises(TrainingInterrupted):
             self.run_training("logged", trainer=InterruptedTrainer)
         run = self.root / "logged"
+        # Order closed fixture files chronologically, independent of same-second writer UID suffixes.
+        initial = run / "runs/events.out.tfevents.0000000001.initial"
+        next((run / "runs").glob("events.out.tfevents.*")).rename(initial)
         with SummaryWriter(str(run / "runs")) as writer:
             writer.add_scalar("train/loss", 999, 777)
+        next(path for path in (run / "runs").glob("events.out.tfevents.*") if path != initial).rename(
+            run / "runs/events.out.tfevents.0000000002.stale"
+        )
         self.run_training("logged", resume=run / "checkpoint-2")
         events = EventAccumulator(str(run / "runs")).Reload()
-        for tag in ("train/loss", "train/grad_norm", "train/learning_rate", "eval/loss",
-                    "eval/answer_accuracy", "eval/answer_format_rate", "eval/generation_truncation_rate",
-                    "eval/full_answer_accuracy"):
+        for tag in ("train/loss", "train/grad_norm", "train/learning_rate", "eval/loss"):
             self.assertIn(tag, events.Tags()["scalars"], tag)
         steps = [event.step for event in events.Scalars("train/loss")]
         self.assertEqual(steps, list(range(1, 19)))
-        self.assertEqual({event.value for event in events.Scalars("eval/generation_samples")}, {1})
-        self.assertEqual([(event.step, event.value) for event in events.Scalars("eval/full_generation_samples")], [(18, 2)])
+        self.assertFalse(any("answer_accuracy" in tag or "generation_" in tag for tag in events.Tags()["scalars"]))
+        report = json.loads((run / "evaluations/final-n2.json").read_text())
+        self.assertEqual(report["metrics"]["generation_samples"], 2)
         self.assertFalse((self.root / "logged-1").exists())
 
     def test_additional_stage_inherits_weights_but_resets_state_and_can_resume(self):
@@ -301,24 +326,105 @@ class BaseSFTTests(unittest.TestCase):
         self.assertEqual(stage_meta["source_adapter"], str(original / "final"))
         self.assertEqual(json.loads((stage / "trainer_state.json").read_text())["global_step"], 9)
         last = json.loads((stage / "checkpoint-9/trainer_state.json").read_text())
-        self.assertTrue(any(item.get("step") == 9 and "eval_full_answer_accuracy" in item for item in last["log_history"]))
-        self.assertEqual([event.step for event in EventAccumulator(str(stage / "runs")).Reload().Scalars("train/loss")],
+        self.assertTrue(any(item.get("step") == 9 and "eval_loss" in item for item in last["log_history"]))
+        self.assertEqual(json.loads((stage / "evaluations/final-n2.json").read_text())["metrics"]["generation_samples"], 2)
+        self.assertEqual(sorted(event.step for event in EventAccumulator(str(stage / "runs")).Reload().Scalars("train/loss")),
                          list(range(1, 10)))
         with self.assertRaisesRegex(ValueError, "training plan is complete"):
             workflow.read_source(original / "checkpoint-18", self.config, resume=True)
 
-    def test_generation_metrics_are_saved_with_the_checkpoint(self):
+    def test_generation_runs_once_after_final_save_and_scores_all_questions(self):
         plan = workflow.data_plan(Dataset.from_list(self.training_rows))
         expected = self.training_rows[plan["validation_indices"][0]]["answer"]
-        with patch.object(workflow, "generate_answer", return_value=(expected, 4, False)):
+
+        def generate(model, tokenizer, question, budget):
+            final = self.root / "scored/final"
+            self.assertTrue((final / "adapter_model.safetensors").is_file())
+            self.assertTrue((final / "run.json").is_file())
+            self.assertEqual(json.loads((final.parent / "trainer_state.json").read_text())["global_step"], 18)
+            self.assertFalse(model.training)
+            self.assertEqual(budget, 4)
+            return expected, 4, False
+
+        with patch.object(evaluation, "generate_answer", side_effect=generate) as called:
             run = self.run_training("scored")
+        self.assertEqual(called.call_count, 2)
+        self.assertEqual(len(self.model_calls), 1)
         state = json.loads((run / "checkpoint-18/trainer_state.json").read_text())
-        evaluation = next(item for item in reversed(state["log_history"]) if "eval_full_answer_accuracy" in item)
-        self.assertEqual(evaluation["eval_answer_accuracy"], 1)
-        self.assertEqual(evaluation["eval_full_answer_accuracy"], 0.5)
-        self.assertEqual(evaluation["eval_generation_samples"], 1)
-        self.assertEqual(evaluation["eval_full_generation_samples"], 2)
-        self.assertEqual(evaluation["eval_full_answer_format_rate"], 1)
+        self.assertFalse(any("eval_answer_accuracy" in item for item in state["log_history"]))
+        report = json.loads((run / "evaluations/final-n2.json").read_text())
+        self.assertEqual(report["metrics"]["answer_accuracy"], 0.5)
+        self.assertEqual(report["metrics"]["generation_samples"], 2)
+        self.assertEqual(report["metrics"]["answer_format_rate"], 1)
+        self.assertEqual(report["data"]["indices"], plan["validation_indices"])
+
+    def test_manual_evaluation_selects_fixed_questions_without_changing_checkpoint(self):
+        run = self.run_training("manual")
+        checkpoint = run / "checkpoint-16"
+        weights = (checkpoint / "adapter_model.safetensors").read_bytes()
+        for name in ("optimizer.pt", "scheduler.pt", "rng_state.pth", "trainer_state.json"):
+            (checkpoint / name).unlink()
+        before = {path.name: path.read_bytes() for path in checkpoint.iterdir() if path.is_file()}
+        subset = self.evaluate(checkpoint, 1)
+        full = self.evaluate(run / "final")
+        self.assertEqual(subset["metrics"]["generation_samples"], 1)
+        self.assertEqual(full["metrics"]["generation_samples"], 2)
+        self.assertEqual(subset["data"]["indices"], full["data"]["indices"][:1])
+        self.assertEqual(before, {path.name: path.read_bytes() for path in checkpoint.iterdir() if path.is_file()})
+        self.assertEqual(weights, (checkpoint / "adapter_model.safetensors").read_bytes())
+        self.assertTrue(self.model_calls[-1]["local_files_only"])
+        self.assertTrue(self.model_calls[-1]["adapter_kwargs"]["local_files_only"])
+        answers = [self.training_rows[index]["answer"] for index in full["data"]["indices"]]
+        with patch.object(evaluation, "generate_answer", side_effect=[(answers[0], 4, False), (answers[1], 4, True)]):
+            scored = self.evaluate(run / "final")
+        self.assertEqual(scored["metrics"]["answer_accuracy"], 0.5)
+        self.assertEqual(scored["metrics"]["answer_format_rate"], 1)
+        self.assertEqual(scored["metrics"]["generation_truncation_rate"], 0.5)
+        with patch.object(evaluation, "generate_answer", return_value=("missing final marker", 4, False)):
+            scored = self.evaluate(run / "final")
+        self.assertEqual(scored["metrics"]["answer_accuracy"], 0)
+        self.assertEqual(scored["metrics"]["answer_format_rate"], 0)
+        calls = len(self.model_calls)
+        for count in (0, -1, 3):
+            with self.assertRaises(SystemExit):
+                self.evaluate(checkpoint, count)
+        with self.assertRaises(SystemExit):
+            self.evaluate(checkpoint, rows=self.training_rows[1:])
+        self.assertEqual(len(self.model_calls), calls)
+
+    def test_interruption_skips_final_evaluation_and_failed_evaluation_can_be_retried(self):
+        with patch.object(train_sft, "evaluate_checkpoint") as called:
+            with self.assertRaises(TrainingInterrupted):
+                self.run_training("pause", trainer=InterruptedTrainer)
+            called.assert_not_called()
+        with patch.object(train_sft, "evaluate_checkpoint", side_effect=RuntimeError("Simulated evaluation failure.")):
+            with self.assertRaisesRegex(RuntimeError, "evaluation failure"):
+                self.run_training("failed-evaluation")
+        run = self.root / "failed-evaluation"
+        saved = (run / "final/adapter_model.safetensors").read_bytes()
+        state = (run / "trainer_state.json").read_bytes()
+        self.assertEqual(json.loads(state)["global_step"], 18)
+        self.assertEqual(self.evaluate(run / "final")["metrics"]["generation_samples"], 2)
+        self.assertEqual(saved, (run / "final/adapter_model.safetensors").read_bytes())
+        self.assertEqual(state, (run / "trainer_state.json").read_bytes())
+
+    def test_english_terminal_stages_and_readable_logs_preserve_numeric_records(self):
+        self.config["disable_tqdm"] = False
+        run = self.run_training("terminal")
+        for label in ("Training", "Validation loss", "Generate validation answers"):
+            self.assertIn(label, self.last_progress)
+        lines = [line for line in self.last_terminal.splitlines()
+                 if line.startswith(("Training |", "Validation |", "Generation evaluation |"))]
+        self.assertTrue(lines)
+        self.assertTrue(any("loss=" in line and "grad_norm=" in line for line in lines))
+        self.assertTrue(all("{" not in line and "}" not in line and "'" not in line for line in lines))
+        history = json.loads((run / "trainer_state.json").read_text())["log_history"]
+        losses = [(row["step"], row["loss"]) for row in history if "loss" in row]
+        self.assertTrue(all(isinstance(value, float) for _, value in losses))
+        events = EventAccumulator(str(run / "runs")).Reload().Scalars("train/loss")
+        for event, (step, value) in zip(events, losses):
+            self.assertEqual(event.step, step)
+            self.assertAlmostEqual(event.value, value, places=5)
 
     def test_training_source_options_fail_before_data_loading(self):
         for options in (("--continue-from", "/missing"), ("--additional-epochs", "1"),
