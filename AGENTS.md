@@ -17,7 +17,7 @@
 
 ## 文档入口
 
-- 变更模型、聊天模板或训练损失时，先读取 [Base 训练约定](docs/qwen3-base.md)。
+- 变更模型、样本格式或训练损失时，先读取 [Base 训练约定](docs/qwen3-base.md)。
 - 调整训练阶段、验证、日志或输出目录时，先读取 [训练运行约定](docs/training-workflow.md)。
 - 编写或重组 README 时，先读取 [README 编写约定](docs/readme-writing.md)。
 - 恢复进度或开展多步骤工作时，读取 [当前计划](task_plan.md)、[进展记录](progress.md) 和 [环境发现](findings.md)，并维护这些文件。

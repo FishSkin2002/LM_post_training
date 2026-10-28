@@ -1,6 +1,6 @@
 # Qwen3 Base 训练约定
 
-用户于 2026-10-28 确定：项目一仅使用 Qwen3 Base，以最简单的聊天模板构造样本，显存方面只采用 LoRA；当前优先让整个项目简单。该约定替代此前的混合思考版和额外显存优化方案。
+用户于 2026-10-28 确定：项目一仅使用 Qwen3 Base，以普通文本说明和 Question/Answer 前缀构造数学题续写样本，显存方面只采用 LoRA。该决定替代此前的聊天模板方案；当前优先建立简单、清楚的数学训练基线。
 
 ## 模型与范围
 
@@ -9,23 +9,33 @@
 - 提供数据检查、LoRA 训练、训练产物保存、原始 Base / 新 LoRA 产物抽样，以及 [训练运行约定](training-workflow.md) 中的 loss 验证记录、独立生成评测、续训、加训和目录避重。沿用 Trainer 和 PEFT，不额外建立训练框架。
 - GRPO 实现、量化、适配器合并导出、显存报告和独立短测入口留待后续明确需求。
 
-## 聊天模板与监督目标
+## 普通文本格式与监督目标
 
-采用单轮 user / assistant 模板，只使用 Qwen3 已有的消息边界标记，不添加新词表项：
+提示的目的，是让原始 Base 与 SFT 模型遵循同一最终答案输出协议，使数值容易提取，从而比较训练前后的效果。使用以下固定英文提示，通过原答案与目标写法的对比说明最终答案格式；推导使用普通文本，不要求计算器注释：
 
 ```text
-<|im_start|>user
-{question}<|im_end|>
-<|im_start|>assistant
-{answer}<|im_end|>
+Solve the following math problem step by step.
+On the last line, write only #### followed by the final numeric answer, without units or other text. For example, if the final answer is 4, write #### 4.
+Use #### only once in your response. Do not write anything after the final answer.
+
+Question: {question}
+Answer:
+{answer}<|endoftext|>
 ```
 
-- question 与 answer 使用 GSM8K 原文。answer 中的推导、计算器注释、#### 及最终数值均保留，不拆分、不重写、不包装思考块。
-- user 消息、assistant 内容之前的模板前缀和 padding 的 labels 为 -100。assistant 内容及结束标记接受同一因果语言模型交叉熵监督；标签与输入等长，由模型执行一次移位。
-- 训练使用标准解答前文预测下一个标准词元，不先 generate 再对生成字符串计算损失。普通批次 padding 与掩码只用于正确构造数据。
-- 固定这份简洁模板并随分词器保存。训练与抽样共用模板；训练的完整样本不额外追加生成前缀，抽样在 assistant 前缀处开始，输入不包含参考解答。
-- 生成停止条件包含助手消息结束标记，不以 Base 原生 endoftext 作为唯一结束条件。助手消息结束后不额外强制附加 endoftext。
-- 不加入思考开关、think 包装或解析。Base 仓库自带的复杂模板不直接作为本项目模板。
+- question 使用 GSM8K 原文；answer 采用官方建议的去注释处理：删除从 `<<` 到 `>>` 的整个子串。例如 `2+3=<<2+3=5>>5` 转为 `2+3=5`。其余推导、空白、#### 及最终数值原样保留；不只删除尖括号，也不重算、补写或重排解答。上例的 `{answer}` 指清理后的文本，原始数据文件保留。
+- 训练与 loss 验证使用同一清理函数；数据预览展示清理后的监督文本。标准解答中的计算器注释不进入监督目标，不增加公式提取、验算或计算器执行路径。
+- 固定说明、Question/Answer 前缀、问题及 padding 的 labels 为 -100；清理后的 answer 全文和末尾一个原生 EOS 接受同一因果语言模型交叉熵监督。标签与输入等长，由模型执行一次移位；EOS 按词元 ID 追加，不将它与 padding 一起屏蔽。
+- 训练和训练过程中的验证 loss 使用标准解答前文预测下一个标准词元，不先 generate 再对生成字符串计算损失。普通批次 padding 与掩码只用于正确构造数据。
+- 训练、loss 验证、抽样与独立生成评测共享同一提示构造。生成输入止于 `Answer:` 后的换行，不含参考答案；模型续写解答，输出原生 `<|endoftext|>` 时停止。计分规则沿用 [训练运行约定](training-workflow.md)。
+- 原始 Base 的生成也使用同一提示，不只为 SFT 模型提供格式说明。比较训练前后效果时保持问题、提示、解码设置与计分口径一致；格式说明中只含固定的无关答案示例，不加入待评测题的参考解答。生成正确率只判定 #### 后最终数值，同时报告答案格式有效率与截断率；不按公式标记或公式内容决定整题正误。
+- 移除自定义聊天模板、角色消息构造、消息边界停止条件和对应的元数据/文件依赖；不保留旧聊天格式兼容或格式切换分支。运行与训练产物不使用聊天模板，不生成 chat_template.jinja；原生词表保持不变，不添加、删除或重编号词元。
+- 运行信息保存普通文本提示、去注释规则与结束设置，并在恢复、加训和独立评测时校验一致；校验服务于当前格式，不保留旧模板读取分支。新格式从原始 Base 发起新训练，旧聊天格式 checkpoint 不作为当前格式的续训、加训或评测来源；已有文件保留。
+- 不加入思考开关、think 包装或解析，也不接入执行计算器的工具。
+
+### 官方标记的含义
+
+[GSM8K 官方说明](https://github.com/openai/grade-school-math#dataset-details) 将 `<<...>>` 定义为计算器注释，并给出去除整个注释子串的方法；它不是覆盖每条公式的完整标注。[原论文附录 C，第17页](https://arxiv.org/pdf/2110.14168#page=17) 明确自动注释可能遗漏本可标注的行。[官方答案判定](https://github.com/openai/grade-school-math/blob/master/grade_school_math/dataset.py) 提取 #### 后的最终答案，不评分推导中的公式。本项目取消公式评测、清理注释是已确认的简化选择，不表示这些注释不属于官方数据。
 
 ## 最小 LoRA 训练
 
@@ -41,4 +51,4 @@
 
 ## 当前状态
 
-本约定已通过 PR #14 合入。代码实现与验证状态见 [README](../README.md) 和 [进展记录](../progress.md)；本文不表示真实 Base 训练、显存或准确率已经验证。
+普通文本方案已由用户确认，当前处于独立要求交付阶段；代码实施在要求合入后进行。实现与验证状态见 [README](../README.md) 和 [进展记录](../progress.md)；本文不表示普通文本格式的训练或准确率已经验证。

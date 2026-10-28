@@ -1,5 +1,60 @@
 # 环境发现
 
+## 去计算器注释方案收口与验证（2026-10-28）
+
+- 用户已明确采用：取消公式评分与提示引导，同时从监督答案删除完整计算器注释子串；原始 Base/SFT 共用的提示只约束最终答案格式。此前公式验算请求被该决定替代，不再需要确认其语法、分母或数值容差。
+- 在原始缓存上只读验证 <<[^<>]*>> 的整段删除规则：7473条解答移除23716个注释，7378条改变、95条不变；逐条比较原始/清理后 #### 尾部字符串和 Decimal 数值一致，拼接所有非注释区段所得文本与清理结果完全一致，未残留 << 或 >>。
+- 普通文本提示已从要求稿删除公式示例，只保留逐步推导和 #### 最终答案示例。数据变化仅是候选清理的验证结果；没有就地改写原始数据或实现生产代码。
+
+## GSM8K 官方标记定义（2026-10-28 核实）
+
+- [官方 README 的 Dataset Details / Calculation Annotations / Solution Extracting](https://github.com/openai/grade-school-math#dataset-details) 明确：最终数值在最后一行并以 #### 开头；<<...>> 是为调用计算器注入的计算注释。官方允许删除从 << 到 >> 的整个子串，留下外部推导与结果。
+- [原论文附录 C，第17页](https://arxiv.org/pdf/2110.14168#page=17) 说明计算器注释由硬编码逻辑和微调模型共同生成，自动逻辑不完美，可能漏掉可标注的行。因此“并非每题都有/并非所有公式都标注”不能推导出“非 GSM8K 官方约定”。
+- [官方 dataset.py:is_correct](https://github.com/openai/grade-school-math/blob/master/grade_school_math/dataset.py) 仅使用 #### 后提取的答案比较，不检查计算注释或逐步公式。它使用正则搜索及字符串比较，不能将项目现有的唯一标记/尾部严格校验与 Decimal 归一化全部归为官方实现。
+- 原始解答中的注释即便不在提示中要求，仍会作为 SFT 标签被学习。用户已据此选择同时对监督文本采用官方整段去注释方法。
+
+## 公式评测事实审计（2026-10-28）
+
+- 现有 evaluate_checkpoint.py:25 的 answer_number 仅解析唯一 #### 后十进制数；:74 的评判只看最终数值匹配且未截断，不检查 <<>>。用户新提出的公式验算尚无实现。
+- 直接 Dataset.from_file 读取 GSM8K train Arrow 缓存，以 <<([^<>]*?)>> 检查注释，7473条中95条无注释；按照原 data_plan 的 random.Random(42).shuffle 和 ceil(10%)，固定验证748条中6条无注释，实际训练6725条中89条。验证索引为618、2517、3562、4121、4358、6281；主代理另逐条核实连 << 和 >> 也不存在。
+- 618/4121为概率百分比运算，2517为房价利润佣金计算，4358为切比萨整除判断；3562/6281含字母方程。它们都含计算过程，不可将“无注释”解释为“不需要计算”。原始标准答案在每题强制至少一注释的门槛下，仅742/748≈99.20%满足。
+- 审计提取23716个注释，所有边界可配对；内部字符限数字、空白、+ - * / ( ) . , =，194个含圆括号，4632个含除法。此结构统计不证明算式成立，也不能据此识别正文里所有未标注公式；注释外另有百分比、变量与自然语言。
+- 用户已确认要验算公式，而不只检查标记。缺注释数据如何处理尚未选择，要求先看6个样本；不能把推荐“公式单列”写成用户已接受，也不能先改写原始监督目标。
+
+## 普通文本主线的清理范围（2026-10-28）
+
+- 用户最新决定普通文本主线，取代上轮“建议先做格式对照”的候选；当前不增加 A/B 格式开关或保留聊天兼容。提示需用原写法/目标写法直接对比；GSM8K 标注示例保留外侧等号，不把用户简写解释为改写数据集的要求。
+- 用户明确提示的主要用途是统一原始 Base/SFT 的可提取输出协议；固定说明不应只加在 SFT 一侧。最终行仅含 #### 与数值、标记只出现一次、无单位/尾文，与现有严格计分匹配。公式注释方便查看，但不扩展成公式正确率或工具执行；格式有效率继续单独报告。
+- 当前业务中的清理点：prepare_sft_data 的 CHAT_TEMPLATE / apply_chat_template，sample_checkpoint 的角色消息和 im_end 双停止，training_workflow 的模板字段校验及 chat_template.jinja 必需文件；对应微型测试、数据预览和 README 需要跟随。原生词表中的登记标记不属于应删数据。
+- 新来源仍需记录/校验普通文本提示与 EOS，防止不同样本格式混入恢复/加训。旧聊天产物按来源不匹配拒绝，无加载或迁移兼容。不能只删模板字段校验而丢失当前提示一致性保护。
+- Base 的 EOS 与 PAD 同为 endoftext；构造/补齐标签须按位置与 attention_mask 区分，不能将所有相同 token ID 一律设为 -100，否则会误屏蔽真实结束监督。
+- 本轮是独立要求交付，业务和 README 尚未实施。当前分支 codex/plain-text-gsm8k-policy，未提交研究记录完整备份 /tmp/qwen-plain-text-policy-notes-20261028。
+
+## 普通文本数学 SFT 的证据与比较边界（2026-10-28）
+
+- [GSM8K 官方数据构造](https://github.com/openai/grade-school-math/blob/master/grade_school_math/dataset.py)：get_examples 为 question 加换行、answer 加 endoftext；GSMDataset 拼接题目与答案，可配置前缀是否计损失。
+- [MetaMath 训练实现](https://github.com/meta-math/MetaMath/blob/main/train_math.py)：PROMPT_DICT 使用普通文本 Instruction/Input/Response，targets 为 output 加 tokenizer.eos_token，preprocess 将 source 前缀标签设为 -100。说明普通文本前缀加答案监督有实践依据，不能作为 Qwen3 上的优越性证据。
+- 用户方案同时更换消息边界并增加说明，两者可能分别改变条件分布和生成格式；想判定边界影响需只改变一个因素，或给两组相同的说明。不同格式的 loss 受上下文、分词边界及结束目标影响，生成正确率应在相同题目、解码预算与计分下比较。
+- loss 验证仍根据标准解答前文预测；纯文本生成评测输入应止于 Answer 前缀，不含参考答案。自然文本仍需明确结束监督；保留原始 answer 并追加 Base 原生 EOS 是候选方案，尚未成为项目要求。
+
+## Base 聊天边界与词元登记（2026-10-28）
+
+- 本项目模板不新增词表项。build_sft_example 的监督后缀为 answer 原文加 `<|im_end|>`；题目、user 边界、assistant 起始边界全部掩码为 -100，但仍作为上下文。训练中的验证 loss 使用相同构造，不执行自由生成。
+- sample_checkpoint.generate_answer 先提供 `<|im_start|>assistant\n`，再生成正文；停止 ID 包含 im_end 和 tokenizer.eos_token_id。没有强行补结束标记，也不要求生成第二个 im_start。解码跳过 special=true 标记，报告仅存解码文字和 token 数/截断状态，不存原始生成 IDs。
+- 官方 [4B 分词器配置](https://huggingface.co/Qwen/Qwen3-4B-Base/blob/main/tokenizer_config.json) 登记 26 项 added tokens，ID 151643～151668；[0.6B](https://huggingface.co/Qwen/Qwen3-0.6B-Base/blob/main/tokenizer_config.json) 与 [8B](https://huggingface.co/Qwen/Qwen3-8B-Base/blob/main/tokenizer_config.json) 的这组登记一致。
+- special=true 共 14 项：endoftext、im_start/im_end、object_ref_start/end、box_start/end、quad_start/end、vision_start/end/pad、image_pad、video_pad。special=false 共 12 项：tool_call/闭合、tool_response/闭合、think/闭合、fim_prefix/middle/suffix/pad、repo_name、file_sep。独立词元不等于被 tokenizer 标为特殊词元。
+- 官方 tokenizer_config 的 EOS/PAD 同为 `<|endoftext|>`，bos_token=null、add_bos_token=false；[生成配置](https://huggingface.co/Qwen/Qwen3-4B-Base/blob/main/generation_config.json) 的 eos_token_id=151643。Base 文件中确实有含思考/工具分支的 chat_template；项目 load_tokenizer 会覆盖为自定义简洁模板。
+- 以上证据说明分词器登记与项目行为，不能据此证明预训练时每类标记的使用频率、Base 已学会对话协议或文本 Base 具备视觉能力。user/assistant 角色文字及 GSM8K 的 #### 不是本项目新增特殊词元。
+
+## 实际训练曲线分析（2026-10-28）
+
+- 用户事件文件共2018个train/loss点、41个eval/loss点，完整覆盖3轮20175步。事件参数确认batch1、累积1、学习率1e-4线性下降、warmup_steps0、max_grad_norm1、FP32、save_total_limit2且load_best_model_at_end=False。
+- 分轮训练日志均值0.339064/0.217819/0.126117、标准差0.048546/0.036247/0.020804；验证点均值0.338622/0.364019/0.443707。训练平滑线下降且绝对波动缩小，不支持“震荡越来越失控”的判断；后两轮验证误差上升，符合过拟合信号。
+- 最低已记录验证loss为step6000、epoch0.892193、0.334727；最终0.451424，较最低高34.8633%。6500→7000及13000→13500的验证loss分别上跳0.035112和0.069539，跨过epoch边界；学习率在边界连续，未重启。
+- 梯度全部有限，中位数1.9758，p95=4.9344，最大11.8129；这是裁剪前的记录值，约84.8%的已记录点大于裁剪阈值1，不能当作所有更新步的精确比例。没有梯度NaN/Inf证据。
+- 事件没有step0的Base验证基线和生成正确率；按记录最低验证loss选权重不保证最高解题正确率。仅保留最近两份且无最佳保留时早期权重可能已清理，TensorBoard事件本身不能恢复权重。
+- 分轮训练统计由区间平均日志再汇总，属于近似描述；直接把总epoch从3改1也会改变线性调度轨迹。下轮预算可围绕第一轮对照，但不把一次日志分析当作已证明某个最佳学习率或rank。
+
 ## 独立生成评测实现（2026-10-28）
 
 - 用户最新职责边界立即生效：Git 的分支、提交、获取和正常推送按受控入口管理；gh 只用 pr create，PR 重复/冲突/状态与接受、拒绝由用户审查。规则已单独交付 PR #20，功能分支从已合入 PR #19 的 main e0ee7d3 开始，不含未合入的规则源文件。
