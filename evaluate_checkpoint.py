@@ -13,7 +13,7 @@ import torch
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM
 
-from prepare_sft_data import load_tokenizer
+from prepare_sft_data import clean_answer, load_tokenizer
 from sample_checkpoint import generate_answer
 from training_workflow import data_plan, format_metrics, read_source
 
@@ -51,6 +51,15 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
             raise ValueError(f"num-samples must be between 1 and {len(indices)}; omit it for the full validation set.")
         indices = indices[:num_samples]
     rows = dataset.select(indices)
+    output = Path(output).expanduser().resolve() if output else (
+        checkpoint.parent / "evaluations" / f"{checkpoint.name}-n{len(rows)}.json"
+    )
+    progress_path = output.with_suffix(".progress.jsonl")
+    predictions = []
+    if progress_path.is_file():
+        with progress_path.open(encoding="utf-8") as saved:
+            predictions = [json.loads(line) for line in saved]
+    print(f"Generation progress: {len(predictions)}/{len(rows)} completed; {progress_path}", flush=True)
     if model is None:
         model = AutoModelForCausalLM.from_pretrained(
             metadata["config"]["model_name"], dtype=torch.float32, local_files_only=True,
@@ -60,32 +69,38 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
         model.to(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     if tokenizer is None:
         tokenizer = load_tokenizer(checkpoint, local_files_only=True)
-    results, predictions = [], []
     was_training = model.training
-    started = time.perf_counter()
     model.eval()
     try:
-        with tqdm(rows, desc="Generate validation answers", unit="question", disable=disable_tqdm) as progress:
-            for position, row in enumerate(progress):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with progress_path.open("a", encoding="utf-8") as saved, tqdm(
+                total=len(rows), initial=len(predictions), desc="Generate validation answers",
+                unit="question", disable=disable_tqdm) as progress:
+            for position in range(len(predictions), len(rows)):
+                row = rows[position]
                 index = indices[position]
                 expected = answer_number(row["answer"])
                 if expected is None:
                     raise ValueError("Validation reference answer has an invalid #### number.")
+                started = time.perf_counter()
                 text, count, truncated = generate_answer(model, tokenizer, row["question"], MAX_NEW_TOKENS)
                 predicted = answer_number(text)
                 correct = not truncated and predicted == expected
-                results.append((correct, predicted is not None, truncated))
-                predictions.append({"index": index, "answer": text, "generated_tokens": count,
-                                    "correct": correct, "format_valid": predicted is not None,
-                                    "truncated": truncated})
+                prediction = {"index": index, "question": row["question"],
+                              "reference_answer": clean_answer(row["answer"]), "answer": text,
+                              "generated_tokens": count, "correct": correct,
+                              "format_valid": predicted is not None, "truncated": truncated,
+                              "generation_runtime": time.perf_counter() - started}
+                saved.write(json.dumps(prediction, ensure_ascii=False) + "\n")
+                saved.flush()
+                predictions.append(prediction)
+                progress.update(1)
     finally:
         model.train(was_training)
-    elapsed = time.perf_counter() - started
+    results = [(row["correct"], row["format_valid"], row["truncated"]) for row in predictions]
+    elapsed = sum(row["generation_runtime"] for row in predictions)
     metrics = answer_metrics(results)
     metrics.update(generation_runtime=elapsed, generation_samples_per_second=len(results) / max(elapsed, 1e-9))
-    output = Path(output).expanduser().resolve() if output else (
-        checkpoint.parent / "evaluations" / f"{checkpoint.name}-n{len(rows)}.json"
-    )
     report = {
         "checkpoint": str(checkpoint), "model_name": metadata["config"]["model_name"],
         "data": {"dataset": "openai/gsm8k", "split": "validation", "indices": indices,
@@ -96,7 +111,6 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
         "scoring": "One #### followed only by a decimal number; exact numeric equality; truncated answers are incorrect.",
         "metrics": metrics, "predictions": predictions,
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(format_metrics(metrics, "Generation evaluation"), flush=True)
     print(f"Saved evaluation report to {output}", flush=True)

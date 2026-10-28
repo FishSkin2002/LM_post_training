@@ -100,6 +100,7 @@ class BaseSFTTests(unittest.TestCase):
         self.model_loader = AutoModelForCausalLM.from_pretrained
         self.tokenizer_loader = AutoTokenizer.from_pretrained
         self.model_calls = []
+        self.evaluation_count = 0
 
     def load_model(self, source, **kwargs):
         self.assertEqual(source, self.model_name)
@@ -135,8 +136,9 @@ class BaseSFTTests(unittest.TestCase):
         line = next(line for line in terminal.getvalue().splitlines() if line.startswith("Output directory: "))
         return Path(line.removeprefix("Output directory: "))
 
-    def evaluate(self, checkpoint, num_samples=None, rows=None):
-        output = self.root / f"evaluation-{checkpoint.name}-{num_samples}.json"
+    def evaluate(self, checkpoint, num_samples=None, rows=None, output=None):
+        self.evaluation_count += 1
+        output = output or self.root / f"evaluation-{self.evaluation_count}.json"
         argv = ["evaluate_checkpoint.py", "--checkpoint", str(checkpoint), "--device", "cpu", "--output", str(output)]
         if num_samples is not None:
             argv += ["--num-samples", str(num_samples)]
@@ -145,8 +147,9 @@ class BaseSFTTests(unittest.TestCase):
                 patch.object(AutoTokenizer, "from_pretrained", side_effect=self.load_tokenizer), \
                 patch.object(evaluation, "load_dataset", return_value=Dataset.from_list(self.training_rows if rows is None else rows)), \
                 patch.object(torch.optim, "AdamW", side_effect=AssertionError("Evaluation must not create an optimizer.")), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                contextlib.redirect_stdout(io.StringIO()) as terminal, contextlib.redirect_stderr(io.StringIO()):
             evaluation.main()
+        self.last_evaluation_terminal = terminal.getvalue()
         return json.loads(output.read_text())
 
     def sample(self, *source):
@@ -406,6 +409,97 @@ class BaseSFTTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["generation_samples"], 2)
         self.assertEqual(report["metrics"]["answer_format_rate"], 1)
         self.assertEqual(report["data"]["indices"], plan["validation_indices"])
+        records = [json.loads(line) for line in (run / "evaluations/final-n2.progress.jsonl").read_text().splitlines()]
+        self.assertEqual(records, report["predictions"])
+        for record in records:
+            row = self.training_rows[record["index"]]
+            self.assertEqual(record["question"], row["question"])
+            self.assertEqual(record["reference_answer"], data.clean_answer(row["answer"]))
+
+    def test_evaluation_appends_each_answer_and_resumes_from_record_count(self):
+        run = self.run_training("append")
+        output = self.root / "append-report.json"
+        progress_path = output.with_suffix(".progress.jsonl")
+        indices = workflow.data_plan(Dataset.from_list(self.training_rows))["validation_indices"]
+
+        def interrupt_after_first(model, tokenizer, question, budget):
+            self.assertFalse(model.training)
+            if question == self.training_rows[indices[1]]["question"]:
+                first = [json.loads(line) for line in progress_path.read_text().splitlines()]
+                self.assertEqual(len(first), 1)
+                self.assertEqual(first[0]["question"], self.training_rows[indices[0]]["question"])
+                self.assertFalse(first[0]["format_valid"])
+                raise KeyboardInterrupt
+            return "no final answer marker", 4, False
+
+        with patch.object(evaluation, "generate_answer", side_effect=interrupt_after_first):
+            with self.assertRaises(KeyboardInterrupt):
+                self.evaluate(run / "final", output=output)
+        self.assertFalse(output.exists())
+        prefix = progress_path.read_bytes()
+        remaining = self.training_rows[indices[1]]
+        with patch.object(evaluation, "generate_answer", return_value=(data.clean_answer(remaining["answer"]), 4, False)) as called:
+            report = self.evaluate(run / "final", output=output)
+        called.assert_called_once()
+        self.assertEqual(called.call_args.args[2], remaining["question"])
+        self.assertIn("Generation progress: 1/2 completed", self.last_evaluation_terminal)
+        self.assertTrue(progress_path.read_bytes().startswith(prefix))
+        records = [json.loads(line) for line in progress_path.read_text().splitlines()]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records, report["predictions"])
+        self.assertEqual([row["index"] for row in records], indices)
+        self.assertEqual(report["metrics"]["answer_accuracy"], 0.5)
+        self.assertEqual(report["metrics"]["answer_format_rate"], 0.5)
+        self.assertEqual(report["metrics"]["generation_runtime"], sum(row["generation_runtime"] for row in records))
+        self.assertEqual(report["metrics"]["generation_samples_per_second"],
+                         2 / max(report["metrics"]["generation_runtime"], 1e-9))
+        for record in records:
+            row = self.training_rows[record["index"]]
+            self.assertEqual(record["question"], row["question"])
+            self.assertEqual(record["reference_answer"], data.clean_answer(row["answer"]))
+            self.assertNotIn("<<", record["reference_answer"])
+        saved = progress_path.read_bytes()
+        with patch.object(evaluation, "generate_answer", side_effect=AssertionError("Completed answers must be reused.")):
+            repeated = self.evaluate(run / "final", output=output)
+        self.assertEqual(repeated, report)
+        self.assertEqual(progress_path.read_bytes(), saved)
+        self.assertIn("Generation progress: 2/2 completed", self.last_evaluation_terminal)
+
+    def test_completed_records_survive_summary_failure_and_include_all_score_outcomes(self):
+        self.training_rows *= 2
+        run = self.run_training("summary-failure")
+        output = self.root / "failed-summary.json"
+        progress_path = output.with_suffix(".progress.jsonl")
+        indices = workflow.data_plan(Dataset.from_list(self.training_rows))["validation_indices"]
+        responses = [
+            (data.clean_answer(self.training_rows[indices[0]]["answer"]), 4, False),
+            ("#### -999999", 4, False),
+            ("missing marker", 4, False),
+            (data.clean_answer(self.training_rows[indices[3]]["answer"]), 4, True),
+        ]
+        write_text = Path.write_text
+
+        def fail_summary(path, *args, **kwargs):
+            if path == output:
+                raise OSError("Simulated summary write failure.")
+            return write_text(path, *args, **kwargs)
+
+        with patch.object(evaluation, "generate_answer", side_effect=responses) as called, \
+                patch.object(Path, "write_text", new=fail_summary):
+            with self.assertRaises(SystemExit):
+                self.evaluate(run / "final", output=output)
+        self.assertEqual(called.call_count, 4)
+        records = [json.loads(line) for line in progress_path.read_text().splitlines()]
+        self.assertEqual(len(records), 4)
+        saved = progress_path.read_bytes()
+        with patch.object(evaluation, "generate_answer", side_effect=AssertionError("Completed answers must be reused.")):
+            report = self.evaluate(run / "final", output=output)
+        self.assertEqual(progress_path.read_bytes(), saved)
+        self.assertEqual(report["predictions"], records)
+        self.assertEqual(report["metrics"]["answer_accuracy"], 0.25)
+        self.assertEqual(report["metrics"]["answer_format_rate"], 0.75)
+        self.assertEqual(report["metrics"]["generation_truncation_rate"], 0.25)
+        self.assertEqual(report["metrics"]["generation_samples"], 4)
 
     def test_manual_evaluation_selects_fixed_questions_without_changing_checkpoint(self):
         run = self.run_training("manual")
