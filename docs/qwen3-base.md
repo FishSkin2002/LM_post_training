@@ -6,7 +6,7 @@
 
 - 主线为原始 Base → 本项目 LoRA SFT → 后续另行开展的 GRPO。开发机使用 Qwen/Qwen3-0.6B-Base，训练机默认 Qwen/Qwen3-4B-Base，8B-Base 仍可显式选择。
 - 业务代码只服务这条 Base 路线，不保留普通版 Qwen3、旧思考格式或旧 checkpoint 的兼容分支。
-- 提供数据检查、LoRA 训练、训练产物保存、原始 Base / 新 LoRA 产物抽样，以及 [训练运行约定](training-workflow.md) 中的验证记录、续训、加训和目录避重。沿用 Trainer 和 PEFT，不额外建立训练框架。
+- 提供数据检查、LoRA 训练、训练产物保存、原始 Base / 新 LoRA 产物抽样，以及 [训练运行约定](training-workflow.md) 中的 loss 验证记录、独立生成评测、续训、加训和目录避重。沿用 Trainer 和 PEFT，不额外建立训练框架。
 - GRPO 实现、量化、适配器合并导出、显存报告和独立短测入口留待后续明确需求。
 
 ## 聊天模板与监督目标

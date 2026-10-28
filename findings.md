@@ -1,5 +1,41 @@
 # 环境发现
 
+## 最终独立评测方案（2026-10-28）
+
+- 用户最终选择取消全部训练中生成监控，仅在正常完成后自动全量生成评测一次；独立脚本支持 checkpoint/final 和自选题数。此选择覆盖此前 32/2000、跳过前两次及开关方案。项目终端提示统一英文，原始数据不改写。
+- 独立要求分支 codex/separate-generation-evaluation-policy 基于 main cd37e57；旧 PR #18 尚未合入。此前未提交的研究/设计记录已完整转移到新分支，未丢失内容或修改历史。
+- 训练进程结束参数更新时仍持有最终模型；若另起进程加载一份同样的 FP32 权重，会增加同时驻留的权重开销。自动调用复用独立脚本内相同评测函数与已有模型即可保持单份模型，手动 CLI 则独立加载来源权重。
+- 独立评测沿用保存的验证索引，省略 --num-samples 为全量，指定 N 为固定前 N 题；实际索引、分母、来源和解码设置写报告。先保存 final/训练状态后评测，评测失败只需重跑评测，不必改变已完成的训练计划。
+
+## GSM8K 训练监控与生成正确率调查（2026-10-28）
+
+- 调查区分三件事：SFT 参数更新的 token 交叉熵、训练期间验证安排、最终独立解题评分。已核查的代表性来源不是随机样本，不据此声称全领域使用比例。
+- [MetaMath 官方训练/评测说明](https://github.com/meta-math/MetaMath/blob/main/README.MD)：公开 SFT 命令 evaluation_strategy=no；[训练入口](https://github.com/meta-math/MetaMath/blob/main/train_math.py) 的 eval_dataset=None。[独立 GSM8K 评测](https://github.com/meta-math/MetaMath/blob/main/eval_gsm8k.py) 调用生成、提取最终数值并汇总正确率。这是训练中不做验证生成、另行生成评测的明确实例，不表示该项目只用 loss 报告数学效果。
+- [ReFT 的 SFT 入口](https://github.com/lqtrung1998/mwp_ReFT/blob/main/train_sft_model.py)：参数更新记录 loss；按可配置步数/epoch 调用 evaluate_generation，贪心生成后处理数值，记录 value_accuracy 并用于最佳模型判断。此例说明训练期间也可以测生成正确率，但频率是实验设置。[GSM8K 实验入口](https://github.com/lqtrung1998/mwp_ReFT/blob/main/exps/paper_exps/SFT/gsm8k.sh) 同时含自然语言/程序推理版本，不能把其计算器执行与本项目纯文本混为一谈。
+- [lm-evaluation-harness GSM8K 配置](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/gsm8k/gsm8k.yaml) 使用 generate_until、贪心生成和 exact_match，有严格/灵活提取过滤器；它是评测工具，不是训练项目。用于佐证 GSM8K 解题成绩来自生成答案，而非训练 loss。
+- [GSM8K 原作者答案判定](https://github.com/openai/grade-school-math/blob/master/grade_school_math/dataset.py) 接收生成 completion，抽取 #### 后数值并与标准答案比较。不同项目的提示、停止、抽取及计分有差别，生成正确率数值不能仅因名称相同而直接横比。
+- [verl 官方 GSM8K 示例](https://verl.readthedocs.io/en/latest/examples/gsm8k_example.html) 链接到当前 [SFT Trainer](https://github.com/verl-project/verl/blob/main/verl/trainer/sft_trainer.py)：训练路径记录 loss 等标量，验证将 infer_batch 的 loss 汇总为 val/loss，该验证循环不自由生成。文档中的后续强化学习阶段根据生成最终答案匹配给奖励，不能将 RL 阶段生成需求直接套为 SFT 验证的强制条件。
+- 结论是对上述公开代码的归纳：SFT 更新使用 loss；训练中生成正确率可选、频率随实验预算；独立解题效果评测依赖生成答案并判定最终结果。当前默认 loss 监控、可选小样本生成、结束后独立全量评测的方案有直接实践依据；此前每 500 步绑定生成属于本项目选择，不是 GSM8K 的统一要求。
+- 对照建议不构成已实施变更：保持 Base/SFT 相同生成与计分协议，32 题用于过程观察；项目内约 748 题是验证集，最终公开 GSM8K 成绩应区分保留的官方 test。MetaMath 使用增强训练数据、ReFT 有程序/自然语言版本，不能复制分数或所有实验习惯到当前纯文本 SFT。
+
+## 终端与续训评测开关的事实核查（2026-10-28）
+
+- 固定版 Transformers 的 ProgressCallback.on_log 复制日志、把浮点格式化为 4 位有效数字后 str(dict) 输出；PrinterCallback 也打印字典。定制终端回调可改为 key=value 行，不改变传给 TensorBoard 的数值。训练/验证条创建于 ProgressCallback，分词为 train_sft.py 内两个 Dataset.map；现有生成条位于 WorkflowTrainer.evaluation_loop，sample_checkpoint.py 的抽样生成循环尚无进度条。
+- 现有 train_sft.py 不捕获 KeyboardInterrupt，finally 仅关闭 writer；WorkflowTrainer 的 finally 仅恢复模型模式。Ctrl+C 不会自动写入当前状态，训练机只能恢复最后完整保存的断点。
+- 只读审计确认优化器更新、调度器更新、清梯度、global_step/epoch 更新并非一个原子操作；在任意异常位置直接补保存可能写入不一致状态。安全暂停需单独处理安全边界及生成中断，不能用简单 catch-and-save 宣称实现。
+- 当前 read_source 对 generation 的 samples/max_new_tokens 完全相等校验，128→64 会被拒绝；新增字段若混入训练配置也会触发全配置一致检查。设计需将允许变更的评测运行选项与训练计划校验分开，保留模型/LoRA/数据/优化器计划的恢复保护，并记录切换步数及实际评测题数。
+- 用户最初要求 64 题/1000 步，最终改为固定 32 题/每 2000 步，沿用跳过前两次。按阶段 global_step 即跳过 2000/4000，首次 6000；恢复不重置这个门槛。按上次速度，32 题一次约 32 分钟；定期生成工作量约为旧 128 题/500 步的 1/16，不等于整体训练耗时减少 16 倍。
+- 已选开关语义：新训练默认关闭；续训未显式指定时继承来源，显式开启/关闭只改变评测执行，不改变训练计划；开关控制定期和末次全部生成，关闭时仍执行完整验证 loss/保存。未执行的生成不应填成正确率 0。暂停只恢复已有完整断点，不新增安全保存机制。
+- 用户只要求训练结束关闭生成时也有一次全量测评方式，不限定具体接口。独立 evaluate_checkpoint.py 可直接复用同一固定验证划分、题目输入及严格计分，读取 final 或 checkpoint 即可，无需优化器/调度器，也不绕过已完成训练拒绝续训的保护。当前为设计选择，入口尚未实现。
+
+## 验证耗时实测与提示缺口（2026-10-28）
+
+- 训练机本次 checkpoint-500：eval_generation_runtime=7785.0046844 秒，eval_runtime=7851.8661 秒，128 题平均约 60.8 秒/题，生成占总验证时间约 99.1%。截断率 0.9375 表示 120 题完整使用 1024-token 预算；这解释了长时间生成，而非 loss 计算缓慢。
+- 原 evaluation_loop 在原生 loss 进度条结束后执行普通 Python for 循环串行生成，期间没有进度输出。最小复现和正式回归在生成首题前检查可见提示，原实现确定失败，加入 tqdm 后通过；这是可见性修复，不是生成速度优化。
+- Trainer 的 _maybe_log_save_evaluate 先完成 evaluate 再执行 _save_checkpoint。停在某个更新步的生成阶段时，该步 checkpoint 尚未完成保存；不能把已经显示 step1000 当成已有 checkpoint-1000。
+- loss 输入为题目与标准 answer 的完整序列，用因果掩码在一次前向中并行计算各位置预测误差；自由生成只能按生成前文逐 token 推进。低 teacher-forcing loss 与早期自由生成格式/正确率为零可以同时出现。
+- 评测工作量候选修改仍未授权：定期固定 32 题/每 2000 步，保持每 500 步 loss/保存；结束全量已确认保留。当前修复保留 128 题/每 500 步、1024-token 上限、完整终评及原来的恢复协议。
+
 ## 训练运行实施（2026-10-28）
 
 - PR #16 已合入 35dee1c，功能分支 codex/training-workflow。以原生 Trainer 的 evaluation_loop / _save 扩展少量记录逻辑，没有引入训练框架或额外显存策略。
