@@ -20,7 +20,7 @@
 │   │   ├── checkpoint-<step>/  # 完整训练断点，最多保留最近两个
 │   │   ├── final/              # 适配器、分词器与运行信息
 │   │   ├── runs/               # 本次运行的 TensorBoard 事件
-│   │   ├── evaluations/        # 生成指标及逐题结果 JSON 报告
+│   │   ├── evaluations/        # 逐题追加 JSONL 与最终汇总 JSON
 │   │   └── trainer_state.json  # Trainer 训练进度与日志
 │   └── samples/                # 抽样问答 Markdown 报告
 ├── docs/                       # 项目目标、训练与协作约定
@@ -134,7 +134,7 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/final
 | --- | --- | --- |
 | `--num-samples` | `1` 到验证集题数的整数；默认全量 | 限制评测题数，超出范围会报错。 |
 | `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
-| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 指定报告位置；相同路径的已有报告会被覆盖。 |
+| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 指定汇总报告及同名基础名进度文件的位置；相同命令自动续跑，换新路径可从头重评。 |
 
 #### 用相同题目子集比较训练断点
 
@@ -149,11 +149,17 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/checkpoint-1000 --num-sa
 | 参数 | 可填项／默认行为 | 用途 |
 | --- | --- | --- |
 | `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
-| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 保存本次比较报告；相同路径会被覆盖。 |
+| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 指定汇总报告及进度文件；重新评同一断点时使用新路径。 |
 
 两种用途均只从本地 checkpoint 和模型缓存加载，需保留分词器与对应 Base 权重。生成使用贪心解码、1024-token 上限和与训练共用的普通文本提示；输入止于 `Answer:` 后的换行，不含标准解答，输出原生 EOS 时结束。
 
-报告包含生成正确率、格式有效率、截断率、题数、耗时、吞吐、来源、文本格式、题目索引和逐题生成结果。恰有一个 `####` 且其后仅为最终数值才算格式有效；合法千位逗号和小数按精确数值比较，`5.0` 与 `5` 相等。格式不合格或截断计错，分母包括所有评测题；不提取或验算公式。详细口径见 [训练运行约定](docs/training-workflow.md)。
+每生成完一题就向 `.progress.jsonl` 追加并刷新一条记录，例如 `checkpoint-1000-n32.progress.jsonl`；完成后另写 `checkpoint-1000-n32.json` 汇总。每条记录包含问题原文 `question`、清理后的完整标准解答 `reference_answer`、模型回答 `answer`，以及题目索引、token 数、判分、截断状态和该题耗时，方便对照。
+
+中断后直接重新执行同一条命令，保持 checkpoint、题数和输出路径一致。脚本读取已有 N 条记录，从固定顺序的第 N+1 题继续；终端显示已完成数，进度条从该位置开始，不需要续跑开关。已保存的错误或截断回答同样复用，已有记录全部完成时不再生成。训练结束自动评测也使用同一保存方式。
+
+续跑后用全部记录汇总正确率、格式有效率、截断率、题数、耗时和吞吐；耗时为各题有效耗时之和，不包含停机时间。最终报告同时保存来源、文本格式和上述逐题记录。需要从头重评时，通过 `--output` 指定新的路径。
+
+恰有一个 `####` 且其后仅为最终数值才算格式有效；合法千位逗号和小数按精确数值比较，`5.0` 与 `5` 相等。格式不合格或截断计错，分母包括所有评测题；不提取或验算公式。详细口径见 [训练运行约定](docs/training-workflow.md)。
 
 ### sample_checkpoint.py
 
@@ -232,7 +238,7 @@ tensorboard --logdir /root/autodl-tmp/outputs/training
 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_base_sft.py
 ```
 
-使用临时随机微型模型和合成样本，核对普通文本提示、去注释、EOS 监督、续训、加训、日志、目录、独立评测及结束调用；不加载真实 Base 权重。
+使用临时随机微型模型和合成样本，核对普通文本提示、去注释、EOS 监督、续训、加训、日志、目录、独立评测及结束调用，以及逐题落盘、中断后按条数继续和汇总重建；不加载真实 Base 权重。
 
 可选参数：
 
