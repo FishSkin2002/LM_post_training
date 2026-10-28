@@ -1,5 +1,24 @@
 # 环境发现
 
+## 训练运行功能事实审计（2026-10-28）
+
+- PR #15 已合入 a9731f8；当前要求分支 codex/training-workflow-policy。用户本轮明确需要续训、TensorBoard 训练/验证日志、目录自动后缀、训练后加训和 README 重组；Base + 简洁 ChatML + FP32 LoRA 保持。
+- 现有 tools/test_base_sft.py 的恢复测试是 callback 正常提前停止并保存后从 step1 续到 step2，适配器逐元素等同连续训练。没有模拟进程强杀或保存中断；当前每 epoch 保存一次，中途故障只能回到已保存断点。
+- 本机 Transformers 5.20.2 对缺 optimizer.pt / scheduler.pt 的 checkpoint 会跳过相应状态恢复，当前入口只检查 Base ID，因此需增加完整状态预检。final 只有适配器与分词器，不是完整恢复状态。
+- 当前恢复输出目录仍取 YAML；从带数字后缀的运行恢复应沿用 checkpoint 父目录。新训练数字避重和恢复旧目录是不同路径，应分别验收。
+- 本机 TensorBoardCallback 已提供 train/loss、train/grad_norm、train/learning_rate、train/epoch 和 eval/loss、耗时/吞吐标量，使用 state.global_step。grad_norm 来自 Trainer._clip_grad_norm，语义为裁剪前范数，不是区间平均梯度。
+- 固定版 TrainingArguments 已没有 logging_dir 参数。默认 TensorBoardCallback 每次开始建立 output_dir/runs/时间戳主机名，续训会成为另一个子 run；可直接向原生 TensorBoardCallback(tb_writer=...) 提供固定路径的 SummaryWriter，并通过 purge_step 处理较早断点之后的失效事件，同时避免重复注册回调。
+- DefaultFlowCallback 支持 steps 验证/保存同频，正常到 max_steps 的最后一步即使不是周期倍数也会触发验证及保存；日志顺序是训练日志、验证、保存。原生 evaluate 不传 compute_metrics 时只计算 loss，不保留全量 logits。
+- GSM8K 本地 dataset_info.json 只有 train=7473、test=1319，没有 validation。候选方案为从 train 固定划出 10%、seed42，test 留作最终评测；验证损失是标准解答条件下的预测损失，不是生成答案的数学正确率。数据与指标、周期尚待用户确认。
+- PEFT 原生支持 PeftModel.from_pretrained(..., is_trainable=True) 从 final/适配器权重开启新训练；新建 Trainer 且 train 不传 resume 会新建优化器、调度器和 TrainerState。无需叠加另一套 LoRA 或引入框架。候选接口 --continue-from 与 --additional-epochs，阶段语义等待用户确认。
+- 直接把完成 checkpoint 的总 epoch 增大再恢复会混用旧优化器学习率与按新总步数建立的调度函数。当前线性调度在完成时到0，下一次更新可能先用旧0学习率再按新计划变化；不能把它与清晰的新阶段加训视为等价。新阶段应保留来源验证划分，避免以前已用于训练的样本变为验证样本。
+- README 已明确标题和章节顺序、每用途一条命令及紧邻可选参数说明，已独立记录规则；实际 README 在功能实现后按真实接口重组，不先宣称待实现功能已可用。
+- 用户已选定每 500 步验证保存、训练每 10 步记录、保留最近两个断点，以及重置优化器/调度/步数的新阶段加训。验证必须包含生成答案正确率；已选定每次固定 128 条、结束全量生成，loss 始终全量。沿用现有贪心与 1024-token 上限；全量和子集结果需分开标识。
+- 只读 Arrow 核验 GSM8K 标签：train 7473 条中 7394 普通整数、79 带千位逗号，负数 3 条；test 1319 条中 1305 普通整数、14 带逗号，负数 2 条。全部解答只有一个 ####，没有小数/货币/单位结尾。未写缓存锁或加载模型。
+- 用户已选严格格式与数值匹配，允许生成的 5.0 与参考 5 相等；缺标记、多标记、额外尾部文字、非法数字和截断均计错，正确率分母包含全部评测题。同时记录格式有效率和截断率。此规则是项目协议，不是复刻官方字符串匹配。
+- [OpenAI GSM8K evaluator](https://github.com/openai/grade-school-math/blob/master/grade_school_math/dataset.py) 使用正则取首个 #### 后数字、去逗号后字符串比较；[lm-eval GSM8K 配置](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/gsm8k/gsm8k.yaml) 区分 strict-match / flexible-extract，并有不同提示和停止配置。本项目不直接把内部验证分数称为榜单可比成绩。
+- sample_checkpoint.generate_answer 已返回文本、生成 token 数和截断状态，可复用其题目输入、停止与预算协议；它不负责 model.eval()，验证调用方需负责评估模式并在结束后恢复训练状态。
+
 ## 最小 Base + LoRA 实施（2026-10-28）
 
 - PR #14 已合入 e0dc862，功能分支 codex/minimal-base-lora。旧实现已按约定文件边界撤下，独立撤销提交 48e05c8 保留历史；未对已有 outputs 或数据执行修改。
