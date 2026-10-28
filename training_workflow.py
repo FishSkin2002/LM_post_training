@@ -11,7 +11,7 @@ from transformers.trainer_callback import PrinterCallback, ProgressCallback
 from transformers.trainer_utils import has_length
 from tqdm.auto import tqdm
 
-from prepare_sft_data import CHAT_TEMPLATE, require_base_model
+from prepare_sft_data import TEXT_FORMAT, require_base_model
 
 
 RUN_FILE = "run.json"
@@ -55,7 +55,7 @@ def save_run(path, metadata):
 def read_source(path, config=None, *, resume=False):
     path = Path(path).expanduser().resolve()
     required = [RUN_FILE, "adapter_config.json", "adapter_model.safetensors",
-                "tokenizer.json", "tokenizer_config.json", "chat_template.jinja"]
+                "tokenizer.json", "tokenizer_config.json"]
     if resume:
         required += ["optimizer.pt", "scheduler.pt", "rng_state.pth", "trainer_state.json",
                      "training_args.bin"]
@@ -70,8 +70,8 @@ def read_source(path, config=None, *, resume=False):
         raise ValueError("Source and configuration must use the same Qwen3 Base model.")
     if metadata["config"]["model_name"] != config["model_name"]:
         raise ValueError("Source run model differs from the configuration.")
-    if metadata["template"] != CHAT_TEMPLATE:
-        raise ValueError("Source chat template differs from the current training format.")
+    if metadata.get("text_format") != TEXT_FORMAT:
+        raise ValueError("Source text format differs; start a new run with the current prompt and answer cleanup.")
     for key, value in config["lora"].items():
         if saved[key] != value:
             raise ValueError(f"Source LoRA {key} differs from the configuration.")
@@ -90,7 +90,7 @@ def read_source(path, config=None, *, resume=False):
 
 def new_run(config, plan, epochs, source_path=None):
     return {
-        "config": deepcopy(config), "data": plan, "epochs": epochs, "template": CHAT_TEMPLATE,
+        "config": deepcopy(config), "data": plan, "epochs": epochs, "text_format": deepcopy(TEXT_FORMAT),
         "source_adapter": str(source_path) if source_path else None,
     }
 

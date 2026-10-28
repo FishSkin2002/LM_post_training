@@ -69,16 +69,15 @@ class BaseSFTTests(unittest.TestCase):
         self.enterContext(patch.object(evaluation, "MAX_NEW_TOKENS", 4))
         self.base = self.root / "tiny-base"
         self.model_name = "Qwen/Qwen3-0.6B-Base"
-        words = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "<unk>",
-                 "user", "assistant", "question", "one", "two", "three", "answer", "####",
-                 "1", "2", "3", "5", "+", "=", "<<2+3=5>>5", "reference"]
+        words = ["<|endoftext|>", "<unk>", "Question:", "Answer:",
+                 "question", "one", "two", "three", "answer", "####",
+                 "1", "2", "3", "4", "5", "+", "=", "reference"]
         words += [f"token{i}" for i in range(len(words), 64)]
         backend = Tokenizer(WordLevel({word: i for i, word in enumerate(words)}, unk_token="<unk>"))
         backend.pre_tokenizer = WhitespaceSplit()
         self.tokenizer = PreTrainedTokenizerFast(
             tokenizer_object=backend, eos_token="<|endoftext|>", pad_token="<|endoftext|>",
-            unk_token="<unk>", additional_special_tokens=["<|im_start|>", "<|im_end|>"],
-            chat_template=data.CHAT_TEMPLATE,
+            unk_token="<unk>",
         )
         self.tokenizer.save_pretrained(self.base)
         torch.manual_seed(7)
@@ -93,7 +92,8 @@ class BaseSFTTests(unittest.TestCase):
             {"question": "question one", "answer": "2 + 3 = <<2+3=5>>5\n#### 5"},
             {"question": "question two", "answer": "answer 1 + 2\n#### 3"},
         ]
-        self.training_rows = [{"question": f"question {i}", "answer": f"answer\n#### {i}"} for i in range(20)]
+        self.training_rows = [{"question": f"question {i}", "answer": f"answer <<{i}+0={i}>>\n#### {i}"}
+                              for i in range(20)]
         self.config = data.load_config(data.CONFIG_DIR / "development/sft.yaml")
         self.config.update(num_train_epochs=1, use_cpu=True, disable_tqdm=True,
                            dataloader_pin_memory=False, logging_steps=1, eval_steps=2, save_steps=2)
@@ -162,24 +162,41 @@ class BaseSFTTests(unittest.TestCase):
         self.assertEqual(terminal.getvalue().strip(), f"Saved report to {output}")
         return output.read_text()
 
-    def test_template_masks_and_padding_preserve_complete_reference(self):
-        row = self.rows[0]
-        text = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": row["question"]},
-             {"role": "assistant", "content": row["answer"]}], tokenize=False,
-        )
-        self.assertEqual(text, f"<|im_start|>user\n{row['question']}<|im_end|>\n"
-                               f"<|im_start|>assistant\n{row['answer']}<|im_end|>")
+    def test_plain_text_masks_and_padding_preserve_cleaned_reference_and_eos(self):
+        raw = "  2+3=<<2+3=5>>5; (6/2)=<<(6/2)=3>>3\n\n#### 5  "
+        cleaned = "  2+3=5; (6/2)=3\n\n#### 5  "
+        self.assertEqual(data.clean_answer(raw), cleaned)
+        self.assertEqual(data.clean_answer(cleaned), cleaned)
+        self.assertEqual(data.clean_answer(self.rows[1]["answer"]), self.rows[1]["answer"])
+        prompt = data.build_prompt("question {one}")
+        self.assertTrue(prompt.endswith("Question: question {one}\nAnswer:\n"))
+        self.assertIn("if the final answer is 4, write #### 4.", prompt)
+        self.assertNotIn("<<", prompt)
         examples = [data.build_sft_example(self.tokenizer, **row) for row in self.rows]
         for example, row in zip(examples, self.rows):
-            answer_ids = self.tokenizer.encode(row["answer"], add_special_tokens=False) + [2]
+            answer_ids = self.tokenizer.encode(data.clean_answer(row["answer"]), add_special_tokens=False) + [0]
+            prompt_ids = self.tokenizer.encode(data.build_prompt(row["question"]), add_special_tokens=False)
             self.assertEqual([value for value in example["labels"] if value != -100], answer_ids)
-            prefix_len = len(example["input_ids"]) - len(answer_ids)
-            self.assertEqual(example["labels"][:prefix_len], [-100] * prefix_len)
-            self.assertEqual(example["input_ids"][-1], 2)
+            self.assertEqual(example["input_ids"], prompt_ids + answer_ids)
+            self.assertEqual(example["labels"][:len(prompt_ids)], [-100] * len(prompt_ids))
+            self.assertEqual(example["input_ids"][-1], self.tokenizer.eos_token_id)
         batch = DataCollatorForSeq2Seq(self.tokenizer)(examples)
         self.assertTrue((batch["labels"][batch["attention_mask"] == 0] == -100).all())
         self.assertEqual(batch["labels"].shape, batch["input_ids"].shape)
+        for index, example in enumerate(examples):
+            self.assertEqual(batch["labels"][index, len(example["input_ids"]) - 1].item(), 0)
+            self.assertEqual(batch["attention_mask"][index, len(example["input_ids"]) - 1].item(), 1)
+
+    def test_saved_tokenizer_has_no_bundled_chat_metadata_or_vocab_changes(self):
+        self.tokenizer.chat_template = "unused bundled metadata"
+        self.tokenizer.save_pretrained(self.base)
+        loaded = data.load_tokenizer(self.base, local_files_only=True)
+        self.assertIsNone(loaded.chat_template)
+        self.assertEqual(loaded.get_vocab(), self.tokenizer.get_vocab())
+        destination = self.root / "saved-tokenizer"
+        loaded.save_pretrained(destination)
+        self.assertFalse((destination / "chat_template.jinja").exists())
+        self.assertIsNone(json.loads((destination / "tokenizer_config.json").read_text()).get("chat_template"))
 
     def test_training_updates_only_fp32_lora_and_resume_matches(self):
         continuous = self.run_training("continuous")
@@ -204,7 +221,12 @@ class BaseSFTTests(unittest.TestCase):
         for name, value in model.get_base_model().named_parameters():
             if "lora_" not in name:
                 self.assertTrue(torch.equal(value, self.initial_weights[name.replace(".base_layer.", ".")]), name)
-        self.assertEqual(self.tokenizer_loader(continuous / "final").chat_template, data.CHAT_TEMPLATE)
+        self.assertIsNone(self.tokenizer_loader(continuous / "final").chat_template)
+        for source in (continuous / "final", interrupted / "checkpoint-18"):
+            self.assertFalse((source / "chat_template.jinja").exists())
+            metadata = json.loads((source / "run.json").read_text())
+            self.assertEqual(metadata["text_format"], data.TEXT_FORMAT)
+            self.assertNotIn("template", metadata)
         self.assertFalse((continuous / "final/model.safetensors").exists())
         state = json.loads((interrupted / "trainer_state.json").read_text())
         self.assertEqual(state["global_step"], 18)
@@ -261,15 +283,42 @@ class BaseSFTTests(unittest.TestCase):
             workflow.read_source(checkpoint, changed, resume=True)
         _, metadata, step = workflow.read_source(checkpoint, self.config, resume=True)
         self.assertEqual(step, 2)
-        metadata["generation"] = {"samples": 128, "max_new_tokens": 1024}
-        workflow.save_run(checkpoint, metadata)
-        self.assertEqual(workflow.read_source(checkpoint, self.config, resume=True)[2], 2)
         with self.assertRaisesRegex(ValueError, "data or validation split"):
             workflow.data_plan(Dataset.from_list(self.training_rows[1:]), metadata)
         with patch.object(AutoModelForCausalLM, "from_pretrained", side_effect=AssertionError("Must fail before weights.")):
             (checkpoint / "optimizer.pt").rename(checkpoint / "optimizer.missing")
             with self.assertRaises(SystemExit):
                 self.run_training("guard", resume=checkpoint)
+
+    def test_all_source_entrypoints_reject_missing_or_changed_text_format_before_weights(self):
+        with self.assertRaises(TrainingInterrupted):
+            self.run_training("format", trainer=InterruptedTrainer)
+        checkpoint = self.root / "format/checkpoint-2"
+        _, original, _ = workflow.read_source(checkpoint)
+        variants = [None]
+        for key in ("prompt", "answer_cleanup", "eos_token"):
+            changed = deepcopy(data.TEXT_FORMAT)
+            changed[key] += " changed"
+            variants.append(changed)
+        for text_format in variants:
+            changed = deepcopy(original)
+            if text_format is None:
+                changed.pop("text_format")
+            else:
+                changed["text_format"] = text_format
+            workflow.save_run(checkpoint, changed)
+            with self.subTest(text_format=text_format), self.assertRaisesRegex(ValueError, "Source text format"):
+                workflow.read_source(checkpoint, self.config, resume=True)
+        calls = len(self.model_calls)
+        with self.assertRaises(SystemExit):
+            self.run_training("format", resume=checkpoint)
+        with self.assertRaises(SystemExit):
+            self.run_training("format", continue_from=checkpoint, additional_epochs=1)
+        with self.assertRaises(SystemExit):
+            self.evaluate(checkpoint)
+        with self.assertRaises(SystemExit):
+            self.sample("--checkpoint", str(checkpoint))
+        self.assertEqual(len(self.model_calls), calls)
 
     def test_tensorboard_resume_purges_stale_tail_and_records_loss_only(self):
         with self.assertRaises(TrainingInterrupted):
@@ -369,6 +418,8 @@ class BaseSFTTests(unittest.TestCase):
         full = self.evaluate(run / "final")
         self.assertEqual(subset["metrics"]["generation_samples"], 1)
         self.assertEqual(full["metrics"]["generation_samples"], 2)
+        self.assertEqual(full["text_format"], data.TEXT_FORMAT)
+        self.assertEqual(full["generation"]["eos_token_id"], self.tokenizer.eos_token_id)
         self.assertEqual(subset["data"]["indices"], full["data"]["indices"][:1])
         self.assertEqual(before, {path.name: path.read_bytes() for path in checkpoint.iterdir() if path.is_file()})
         self.assertEqual(weights, (checkpoint / "adapter_model.safetensors").read_bytes())
@@ -384,6 +435,10 @@ class BaseSFTTests(unittest.TestCase):
             scored = self.evaluate(run / "final")
         self.assertEqual(scored["metrics"]["answer_accuracy"], 0)
         self.assertEqual(scored["metrics"]["answer_format_rate"], 0)
+        with patch.object(evaluation, "generate_answer", side_effect=[
+                (f"2+3=6\n#### {evaluation.answer_number(answer)}", 4, False) for answer in answers]):
+            scored = self.evaluate(run / "final")
+        self.assertEqual(scored["metrics"]["answer_accuracy"], 1)
         calls = len(self.model_calls)
         for count in (0, -1, 3):
             with self.assertRaises(SystemExit):
@@ -439,31 +494,39 @@ class BaseSFTTests(unittest.TestCase):
     def test_original_and_zero_adapter_sample_same_answers_without_reference_input(self):
         base = self.load_model(self.model_name, dtype=torch.float32)
         adapter = self.root / "adapter"
-        get_peft_model(base, LoraConfig(task_type="CAUSAL_LM", target_modules="all-linear", r=2)).save_pretrained(adapter)
+        get_peft_model(base, LoraConfig(task_type="CAUSAL_LM", target_modules="all-linear",
+                                      **self.config["lora"])).save_pretrained(adapter)
         self.tokenizer.save_pretrained(adapter)
+        workflow.save_run(adapter, workflow.new_run(self.config, workflow.data_plan(Dataset.from_list(self.training_rows)), 1))
         original = self.sample("--model-name", self.model_name, "--local-files-only")
         tuned = self.sample("--checkpoint", str(adapter))
         self.assertEqual(original[original.index("## 样本"):], tuned[tuned.index("## 样本"):])
-        self.assertIn(self.rows[0]["answer"], original)
+        self.assertIn(data.clean_answer(self.rows[0]["answer"]), original)
+        self.assertNotIn("<<", original)
         self.assertTrue(all(call["local_files_only"] for call in self.model_calls[1:]))
         self.assertTrue(all(call["adapter_kwargs"]["local_files_only"] for call in self.model_calls[1:]))
         model = self.model_loader(self.base, local_files_only=True)
         generate = model.generate
         with patch.object(model, "generate", wraps=generate) as called:
             sample_checkpoint.generate_answer(model, self.tokenizer, self.rows[0]["question"], 4)
-        prompt = self.tokenizer.decode(called.call_args.kwargs["input_ids"][0], skip_special_tokens=False)
-        self.assertNotIn("####", prompt)
-        self.assertTrue(prompt.endswith("assistant"))
+        prompt_ids = called.call_args.kwargs["input_ids"][0].tolist()
+        example = data.build_sft_example(self.tokenizer, **self.rows[0])
+        prefix_length = next(index for index, value in enumerate(example["labels"]) if value != -100)
+        self.assertEqual(prompt_ids, example["input_ids"][:prefix_length])
+        self.assertEqual(prompt_ids, self.tokenizer.encode(data.build_prompt(self.rows[0]["question"]),
+                                                        add_special_tokens=False))
+        self.assertTrue(self.tokenizer.decode(prompt_ids).endswith("Answer:"))
 
-    def test_real_generation_stops_at_assistant_end_and_reports_truncation(self):
+    def test_real_generation_stops_at_native_eos_and_reports_truncation(self):
         model = self.model_loader(self.base, local_files_only=True)
         generate = model.generate
         with patch.object(model, "generate", side_effect=lambda **kwargs: generate(
-                **kwargs, logits_processor=[ForceToken(2)])):
-            answer, count, truncated = sample_checkpoint.generate_answer(model, self.tokenizer, "question one", 4)
-        self.assertEqual((answer, count, truncated), ("", 1, False))
+                **kwargs, logits_processor=[ForceToken(self.tokenizer.eos_token_id)])):
+            for budget in (1, 4):
+                answer, count, truncated = sample_checkpoint.generate_answer(model, self.tokenizer, "question one", budget)
+                self.assertEqual((answer, count, truncated), ("", 1, False))
         with patch.object(model, "generate", side_effect=lambda **kwargs: generate(
-                **kwargs, logits_processor=[ForceToken(7)])):
+                **kwargs, logits_processor=[ForceToken(self.tokenizer.convert_tokens_to_ids("one"))])):
             _, count, truncated = sample_checkpoint.generate_answer(model, self.tokenizer, "question one", 4)
         self.assertEqual((count, truncated), (4, True))
         with self.assertRaisesRegex(ValueError, "exceed"):

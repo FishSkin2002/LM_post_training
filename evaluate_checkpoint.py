@@ -90,7 +90,9 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
         "checkpoint": str(checkpoint), "model_name": metadata["config"]["model_name"],
         "data": {"dataset": "openai/gsm8k", "split": "validation", "indices": indices,
                  "fingerprint": plan["fingerprint"], "split_seed": plan["split_seed"]},
-        "generation": {"do_sample": False, "max_new_tokens": MAX_NEW_TOKENS},
+        "text_format": metadata["text_format"],
+        "generation": {"do_sample": False, "max_new_tokens": MAX_NEW_TOKENS,
+                       "eos_token_id": tokenizer.eos_token_id},
         "scoring": "One #### followed only by a decimal number; exact numeric equality; truncated answers are incorrect.",
         "metrics": metrics, "predictions": predictions,
     }

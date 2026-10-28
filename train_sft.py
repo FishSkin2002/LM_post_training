@@ -1,4 +1,4 @@
-"""Train a Qwen3 Base LoRA adapter on complete GSM8K reference answers."""
+"""Train a Qwen3 Base LoRA adapter on GSM8K answers without calculator annotations."""
 
 import argparse
 import math
