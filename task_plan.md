@@ -9,8 +9,8 @@
 | 阶段 | 状态 | 完成条件 |
 | --- | --- | --- |
 | 保留记录并开始分支 | complete | 未提交研究记录已完整备份 /tmp/qwen-plain-text-policy-notes-20261028 并随受控 start 带入 codex/plain-text-gsm8k-policy；不改写历史、不检查 PR 状态。 |
-| 更新已确定要求 | complete | 固定对比式英文说明、Question/Answer、原始 answer 与原生 EOS；清理旧模板职责与术语，明确来源格式校验和不兼容边界，保持 LoRA/日志/评测协议。 |
-| 校对与要求 PR | in_progress | 校对语义、本地链接及纯文档差异，提交并正常推送，只使用 gh pr create 发起 PR。 |
+| 更新已确定要求 | complete | 固定对比式英文说明、Question/Answer、原始 answer 与原生 EOS；明确原始 Base/SFT 共用输出协议、唯一 #### 与末行数值，清理旧模板职责与术语，保持 LoRA/日志/评测协议。 |
+| 校对与要求 PR | in_progress | 纯文档差异、20 个本地链接、两组对比例子及输出协议检查通过；要求提交已正常推送，继续补交用户对提示目的的说明并仅以 gh pr create 发起 PR。 |
 | 代码实施 | pending | 要求合入后从最新 main 新建功能分支，删除聊天构造/停止/文件依赖，统一普通文本前缀、EOS 监督及来源信息，更新 README 与必要验证。 |
 
 ## 上一小步：普通文本方案评估

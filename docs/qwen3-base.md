@@ -11,12 +11,13 @@
 
 ## 普通文本格式与监督目标
 
-使用以下固定英文提示。说明通过原写法与目标写法的对比，表达计算注释和最终答案格式；公式外侧保留等号，与 GSM8K 解答一致：
+提示的目的，是让原始 Base 与 SFT 模型遵循同一输出协议，使最终数值容易提取、计算过程便于定位，从而比较训练前后的效果。使用以下固定英文提示，通过原写法与目标写法的对比说明格式；公式外侧保留等号，与 GSM8K 解答一致：
 
 ```text
 Solve the following math problem step by step.
-Write an arithmetic calculation such as 2+3=5 as 2+3=<<2+3=5>>5.
-Write a final numeric answer such as 4 as #### 4.
+For arithmetic calculations, follow this example: write 2+3=5 as 2+3=<<2+3=5>>5.
+On the last line, write only #### followed by the final numeric answer, without units or other text. For example, if the final answer is 4, write #### 4.
+Use #### only once in your response. Do not write anything after the final answer.
 
 Question: {question}
 Answer:
@@ -27,6 +28,7 @@ Answer:
 - 固定说明、Question/Answer 前缀、问题及 padding 的 labels 为 -100；原始 answer 全文和末尾一个原生 EOS 接受同一因果语言模型交叉熵监督。标签与输入等长，由模型执行一次移位；EOS 按词元 ID 追加，不将它与 padding 一起屏蔽。
 - 训练和训练过程中的验证 loss 使用标准解答前文预测下一个标准词元，不先 generate 再对生成字符串计算损失。普通批次 padding 与掩码只用于正确构造数据。
 - 训练、loss 验证、抽样与独立生成评测共享同一提示构造。生成输入止于 `Answer:` 后的换行，不含参考答案；模型续写解答，输出原生 `<|endoftext|>` 时停止。计分规则沿用 [训练运行约定](training-workflow.md)。
+- 原始 Base 的生成也使用同一提示，不只为 SFT 模型提供格式说明。比较训练前后效果时保持问题、提示、解码设置与计分口径一致；格式说明中只含固定的无关示例，不加入待评测题的参考解答。公式注释用于定位和阅读，生成正确率仍仅判定最终数值，同时报告格式有效率与截断率。
 - 移除自定义聊天模板、角色消息构造、消息边界停止条件和对应的元数据/文件依赖；不保留旧聊天格式兼容或格式切换分支。运行与训练产物不使用聊天模板，不生成 chat_template.jinja；原生词表保持不变，不添加、删除或重编号词元。
 - 运行信息保存普通文本提示与结束设置，并在恢复、加训和独立评测时校验一致；校验服务于当前格式，不保留旧模板读取分支。新格式从原始 Base 发起新训练，旧聊天格式 checkpoint 不作为当前格式的续训、加训或评测来源；已有文件保留。
 - 不加入思考开关、think 包装或解析，也不接入执行计算器的工具。提示中的计算注释仅是要学习的输出文本。
