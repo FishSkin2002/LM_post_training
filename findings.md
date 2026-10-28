@@ -1,5 +1,13 @@
 # 环境发现
 
+## 验证耗时实测与提示缺口（2026-10-28）
+
+- 训练机本次 checkpoint-500：eval_generation_runtime=7785.0046844 秒，eval_runtime=7851.8661 秒，128 题平均约 60.8 秒/题，生成占总验证时间约 99.1%。截断率 0.9375 表示 120 题完整使用 1024-token 预算；这解释了长时间生成，而非 loss 计算缓慢。
+- 原 evaluation_loop 在原生 loss 进度条结束后执行普通 Python for 循环串行生成，期间没有进度输出。最小复现和正式回归在生成首题前检查可见提示，原实现确定失败，加入 tqdm 后通过；这是可见性修复，不是生成速度优化。
+- Trainer 的 _maybe_log_save_evaluate 先完成 evaluate 再执行 _save_checkpoint。停在某个更新步的生成阶段时，该步 checkpoint 尚未完成保存；不能把已经显示 step1000 当成已有 checkpoint-1000。
+- loss 输入为题目与标准 answer 的完整序列，用因果掩码在一次前向中并行计算各位置预测误差；自由生成只能按生成前文逐 token 推进。低 teacher-forcing loss 与早期自由生成格式/正确率为零可以同时出现。
+- 评测工作量候选修改仍未授权：定期固定 32 题/每 2000 步，保持每 500 步 loss/保存；结束全量已确认保留。当前修复保留 128 题/每 500 步、1024-token 上限、完整终评及原来的恢复协议。
+
 ## 训练运行实施（2026-10-28）
 
 - PR #16 已合入 35dee1c，功能分支 codex/training-workflow。以原生 Trainer 的 evaluation_loop / _save 扩展少量记录逻辑，没有引入训练框架或额外显存策略。

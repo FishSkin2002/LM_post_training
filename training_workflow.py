@@ -10,6 +10,7 @@ import re
 import time
 
 from transformers import Trainer
+from tqdm.auto import tqdm
 
 from prepare_sft_data import CHAT_TEMPLATE
 from sample_checkpoint import generate_answer
@@ -139,21 +140,23 @@ class WorkflowTrainer(Trainer):
             rows = self.validation_rows if full else self.validation_rows.select(range(subset_count))
             started = time.perf_counter()
             results = []
-            for row in rows:
-                expected = answer_number(row["answer"])
-                if expected is None:
-                    raise ValueError("Validation reference answer has an invalid #### number.")
-                text, _, truncated = generate_answer(
-                    self.model, self.processing_class, row["question"], GENERATION_MAX_NEW_TOKENS,
-                )
-                predicted = answer_number(text)
-                results.append((not truncated and predicted == expected, predicted is not None, truncated))
-                if len(results) == subset_count:
-                    metrics = answer_metrics(results)
-                    elapsed = time.perf_counter() - started
-                    metrics.update(generation_runtime=elapsed,
-                                   generation_samples_per_second=len(results) / max(elapsed, 1e-9))
-                    output.metrics.update({f"{metric_key_prefix}_{key}": value for key, value in metrics.items()})
+            with tqdm(rows, desc=f"Generate validation answers (step {self.state.global_step})",
+                      unit="question", disable=self.args.disable_tqdm or not self.is_world_process_zero()) as progress:
+                for row in progress:
+                    expected = answer_number(row["answer"])
+                    if expected is None:
+                        raise ValueError("Validation reference answer has an invalid #### number.")
+                    text, _, truncated = generate_answer(
+                        self.model, self.processing_class, row["question"], GENERATION_MAX_NEW_TOKENS,
+                    )
+                    predicted = answer_number(text)
+                    results.append((not truncated and predicted == expected, predicted is not None, truncated))
+                    if len(results) == subset_count:
+                        metrics = answer_metrics(results)
+                        elapsed = time.perf_counter() - started
+                        metrics.update(generation_runtime=elapsed,
+                                       generation_samples_per_second=len(results) / max(elapsed, 1e-9))
+                        output.metrics.update({f"{metric_key_prefix}_{key}": value for key, value in metrics.items()})
             if full:
                 metrics = answer_metrics(results)
                 elapsed = time.perf_counter() - started

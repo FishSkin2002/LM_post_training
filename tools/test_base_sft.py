@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
@@ -25,6 +26,7 @@ from transformers import (
 )
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 from torch.utils.tensorboard import SummaryWriter
+from transformers.trainer_utils import EvalLoopOutput
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import prepare_sft_data as data
@@ -319,6 +321,38 @@ class BaseSFTTests(unittest.TestCase):
         self.assertEqual(evaluation["eval_generation_samples"], 1)
         self.assertEqual(evaluation["eval_full_generation_samples"], 2)
         self.assertEqual(evaluation["eval_full_answer_format_rate"], 1)
+
+    def test_generation_progress_starts_before_work_and_respects_quiet_mode(self):
+        for step, count, quiet in ((1000, 1, False), (20175, 2, False), (1000, 1, True)):
+            with self.subTest(step=step, quiet=quiet):
+                trainer = object.__new__(workflow.WorkflowTrainer)
+                trainer.model = torch.nn.Linear(1, 1)
+                trainer.processing_class = self.tokenizer
+                trainer.state = SimpleNamespace(max_steps=20175, global_step=step)
+                trainer.args = SimpleNamespace(disable_tqdm=quiet)
+                trainer.is_world_process_zero = lambda: True
+                trainer.validation_rows = Dataset.from_list(self.rows)
+                terminal = io.StringIO()
+
+                def generate(*args):
+                    self.assertFalse(trainer.model.training)
+                    if not quiet:
+                        self.assertIn("Generate validation answers", terminal.getvalue())
+                    return "#### 5", 3, False
+
+                loss = EvalLoopOutput(predictions=None, label_ids=None, metrics={"eval_loss": 0.5}, num_samples=2)
+                with patch.object(Trainer, "evaluation_loop", return_value=loss), \
+                        patch.object(workflow, "generate_answer", side_effect=generate) as called, \
+                        contextlib.redirect_stderr(terminal):
+                    result = trainer.evaluation_loop(None, "Validation")
+                self.assertEqual(called.call_count, count)
+                self.assertEqual(result.metrics["eval_generation_samples"], 1)
+                self.assertTrue(trainer.model.training)
+                if quiet:
+                    self.assertEqual(terminal.getvalue(), "")
+                else:
+                    self.assertIn(f"step {step}", terminal.getvalue())
+                    self.assertIn(f"{count}/{count}", terminal.getvalue())
 
     def test_training_source_options_fail_before_data_loading(self):
         for options in (("--continue-from", "/missing"), ("--additional-epochs", "1"),

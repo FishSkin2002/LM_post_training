@@ -167,6 +167,8 @@ tensorboard --logdir /root/autodl-tmp/outputs/training
 
 训练指标默认每 10 步记录，验证和保存默认每 500 步进行。train 固定划出 10% 作验证（seed=42），test 留作最终评测；验证 loss 始终全量计算，定期生成固定 128 条，结束时生成完整验证集。
 
+验证先显示完整验证集的 loss 进度，随后显示 `Generate validation answers (step ...)` 的生成进度。生成进度按完成的题目更新，并显示耗时和预计剩余时间；loss 的 `748/748` 不表示整次验证已结束。
+
 | 曲线 | 含义 |
 | --- | --- |
 | `train/loss`、`train/grad_norm`、`train/learning_rate`、`train/epoch` | 区间平均训练损失、记录步的裁剪前梯度范数、学习率、训练轮次。 |
