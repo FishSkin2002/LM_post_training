@@ -415,11 +415,16 @@ class BaseSFTTests(unittest.TestCase):
             row = self.training_rows[record["index"]]
             self.assertEqual(record["question"], row["question"])
             self.assertEqual(record["reference_answer"], data.clean_answer(row["answer"]))
+        readable = (run / "evaluations/final-n2.md").read_text()
+        self.assertEqual(readable.count("## Question "), len(records))
+        self.assertIn("### Reference answer\n\n", readable)
+        self.assertIn("### Model answer\n\n", readable)
 
     def test_evaluation_appends_each_answer_and_resumes_from_record_count(self):
         run = self.run_training("append")
         output = self.root / "append-report.json"
         progress_path = output.with_suffix(".progress.jsonl")
+        readable_path = output.with_suffix(".md")
         indices = workflow.data_plan(Dataset.from_list(self.training_rows))["validation_indices"]
 
         def interrupt_after_first(model, tokenizer, question, budget):
@@ -429,14 +434,19 @@ class BaseSFTTests(unittest.TestCase):
                 self.assertEqual(len(first), 1)
                 self.assertEqual(first[0]["question"], self.training_rows[indices[0]]["question"])
                 self.assertFalse(first[0]["format_valid"])
+                readable = readable_path.read_text()
+                self.assertIn("## Question 1 (dataset index ", readable)
+                self.assertNotIn("## Question 2 (dataset index ", readable)
+                self.assertIn("    First line.\n    No final answer marker.", readable)
                 raise KeyboardInterrupt
-            return "no final answer marker", 4, False
+            return "First line.\nNo final answer marker.", 4, False
 
         with patch.object(evaluation, "generate_answer", side_effect=interrupt_after_first):
             with self.assertRaises(KeyboardInterrupt):
                 self.evaluate(run / "final", output=output)
         self.assertFalse(output.exists())
         prefix = progress_path.read_bytes()
+        readable_path.unlink()
         remaining = self.training_rows[indices[1]]
         with patch.object(evaluation, "generate_answer", return_value=(data.clean_answer(remaining["answer"]), 4, False)) as called:
             report = self.evaluate(run / "final", output=output)
@@ -453,6 +463,12 @@ class BaseSFTTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["generation_runtime"], sum(row["generation_runtime"] for row in records))
         self.assertEqual(report["metrics"]["generation_samples_per_second"],
                          2 / max(report["metrics"]["generation_runtime"], 1e-9))
+        readable = readable_path.read_text()
+        self.assertEqual(readable.count("## Question "), len(records))
+        self.assertIn("    First line.\n    No final answer marker.", readable)
+        self.assertIn("    #### ", readable)
+        self.assertIn("Correct: False | Format valid: False | Truncated: False", readable)
+        self.assertIn(f"Readable answers: {readable_path}", self.last_evaluation_terminal)
         for record in records:
             row = self.training_rows[record["index"]]
             self.assertEqual(record["question"], row["question"])
@@ -463,6 +479,7 @@ class BaseSFTTests(unittest.TestCase):
             repeated = self.evaluate(run / "final", output=output)
         self.assertEqual(repeated, report)
         self.assertEqual(progress_path.read_bytes(), saved)
+        self.assertEqual(readable_path.read_text(), readable)
         self.assertIn("Generation progress: 2/2 completed", self.last_evaluation_terminal)
 
     def test_completed_records_survive_summary_failure_and_include_all_score_outcomes(self):

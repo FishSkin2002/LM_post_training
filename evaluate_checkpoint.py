@@ -5,6 +5,7 @@ from decimal import Decimal
 import json
 from pathlib import Path
 import re
+from textwrap import indent
 import time
 
 from datasets import load_dataset
@@ -39,6 +40,19 @@ def answer_metrics(results):
     }
 
 
+def readable_prediction(position, prediction):
+    return (
+        f"## Question {position + 1} (dataset index {prediction['index']})\n\n"
+        f"Correct: {prediction['correct']} | Format valid: {prediction['format_valid']} | "
+        f"Truncated: {prediction['truncated']}\n\n"
+        f"Generated tokens: {prediction['generated_tokens']} | "
+        f"Generation time: {prediction['generation_runtime']:.3f} s\n\n"
+        f"### Question\n\n{indent(prediction['question'], '    ')}\n\n"
+        f"### Reference answer\n\n{indent(prediction['reference_answer'], '    ')}\n\n"
+        f"### Model answer\n\n{indent(prediction['answer'], '    ')}\n\n---\n\n"
+    )
+
+
 def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=None,
                         model=None, tokenizer=None, dataset=None, disable_tqdm=False):
     checkpoint, metadata, _ = read_source(checkpoint)
@@ -55,11 +69,13 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
         checkpoint.parent / "evaluations" / f"{checkpoint.name}-n{len(rows)}.json"
     )
     progress_path = output.with_suffix(".progress.jsonl")
+    readable_path = output.with_suffix(".md")
     predictions = []
     if progress_path.is_file():
         with progress_path.open(encoding="utf-8") as saved:
             predictions = [json.loads(line) for line in saved]
     print(f"Generation progress: {len(predictions)}/{len(rows)} completed; {progress_path}", flush=True)
+    print(f"Readable answers: {readable_path}", flush=True)
     if model is None:
         model = AutoModelForCausalLM.from_pretrained(
             metadata["config"]["model_name"], dtype=torch.float32, local_files_only=True,
@@ -73,9 +89,14 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
     model.eval()
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
-        with progress_path.open("a", encoding="utf-8") as saved, tqdm(
+        with progress_path.open("a", encoding="utf-8") as saved, \
+                readable_path.open("w", encoding="utf-8") as readable, tqdm(
                 total=len(rows), initial=len(predictions), desc="Generate validation answers",
                 unit="question", disable=disable_tqdm) as progress:
+            readable.write(f"# GSM8K generation evaluation\n\nCheckpoint: `{checkpoint}`\n\n")
+            for position, prediction in enumerate(predictions):
+                readable.write(readable_prediction(position, prediction))
+            readable.flush()
             for position in range(len(predictions), len(rows)):
                 row = rows[position]
                 index = indices[position]
@@ -93,6 +114,8 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
                               "generation_runtime": time.perf_counter() - started}
                 saved.write(json.dumps(prediction, ensure_ascii=False) + "\n")
                 saved.flush()
+                readable.write(readable_prediction(position, prediction))
+                readable.flush()
                 predictions.append(prediction)
                 progress.update(1)
     finally:
