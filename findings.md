@@ -1,5 +1,82 @@
 # 环境发现
 
+## 最新决定：简单的 Base + LoRA 路线（2026-10-28）
+
+- 用户已确认简洁 user / assistant 模板、原样标准解答及结束标记监督；同时要求当前只用 LoRA 节省显存，优先整个项目简单。此前的混合精度、激活检查点、累积等保留建议已被本轮指示覆盖。
+- 已确定要求集中到 docs/qwen3-base.md。以固定 FP32 和常规 Trainer 训练为基线，不加入额外显存策略或自动精度选择；只保留 LoRA 路径、必要数据/保存/抽样能力，现有业务实现尚未变化。
+- 角色模板使用已有 im_start / im_end 标记，answer 全文含 ####；用户、回答前缀和 padding 掩码为 -100，生成停止与助手结束标记一致。旧的原生 Base EOS 纯文本候选及 think 目标均不再是当前约定。
+- 本轮删除讨论草案与旧思考规则，更新 AGENTS 指针、术语与项目一目标。研究记录保留历史选择与依据，顶部本节及新约定表示当前决定；未对 outputs 或 Git 历史执行删除。
+
+## Base 角色模板与当前显存措施（2026-10-28）
+
+- [Transformers 聊天模板说明](https://huggingface.co/docs/transformers/chat_templating)明确：聊天与非聊天因果模型都续写词元序列；在 Base 上以角色标记格式做 SFT 是合理路线，模板是数据序列化规则，不要求起点已经过官方聊天后训练。它不是所有数学实验的唯一标准。
+- [Qwen3-4B-Base 实际 tokenizer 配置](https://huggingface.co/Qwen/Qwen3-4B-Base/blob/main/tokenizer_config.json)中的 assistant 分支会包装 think 内容，即使原 content 只含标准解答，也会产生空思考块；enable_thinking=False 的生成前缀同样带空思考块。不能把“用官方模板”直接描述为只添加 user / assistant 边界。
+- 当前推荐候选是简洁 ChatML 角色模板，使用已有 im_start / im_end 标记，不新增词表项，不加入 think 包装；assistant 内容为原始 answer（含推导、计算器注释、#### 和最终结果），只监督其内容及结束标记。训练/抽样同模板，生成停止须包含 im_end；本建议仍待确认，已替换纯文本候选草案。
+- 当前实际训练代码（尚未 Base 重写）：train_sft.make_training_args 在 CUDA LoRA 下按支持情况选择 BF16 底座与 BF16 AMP，或 FP16 底座与 FP16 AMP；sft_runtime.attach_lora 保留 FP32 适配器，因此不是所有训练张量都采用半精度。CPU 验证采用 FP32。
+- configs 三套训练参数均为 microbatch=1、gradient_accumulation_steps=16，gradient_checkpointing=True / use_reentrant=False；单卡有效批量为 16，省显存来自较小微批量，累积不消除模型状态占用。检查点以反向重算换较少的激活保存，不把 use_reentrant=False 本身当作独立显存优化。
+- COMMON_CONFIG 指定 attention_implementation=sdpa；是否调度到 Flash 或其他内核受设备、形状、精度和 PyTorch 版本影响，项目没有显式启用 flash_attention_2。训练时 model.config.use_cache=False，推理时才重新启用缓存。
+- DataCollatorForSeq2Seq(padding=True) 只补到当前批最长序列，避免预先补到全局固定长；当前批量 1 时基本没有批内 padding。prompt / padding 的 labels=-100 是监督范围，不代表这些位置免于前向和注意力计算。
+- README 推荐 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 以缓解碎片，训练脚本没有自动设置；未核实用户远程进程是否实际导出该环境变量。它不减少模型理论张量需求。optim=adamw_torch_fused 主要用于执行效率，适配器 Adam 状态依旧 FP32。
+- 当前 requirements 和训练路径没有 QLoRA / bitsandbytes、8-bit 优化器、CPU/NVMe offload 或 ZeRO / FSDP 分片。Base 重写尚未执行，不能把这些现有机制描述成新的 Base 实测结果。
+
+## Base 全面重写前的边界核查（2026-10-28）
+
+- 用户已选择 Base 唯一主线并要求先追加撤销提交、再重写旧代码；该选择覆盖此前“起点待定”和“保留旧普通版兼容”的候选方案。历史产物未获删除要求。
+- 当前 HEAD / origin/main 为 3f09a13（PR #13 merge）。最后功能提交 d7bb775 只修复仓库名称提示与 local_files_only 传递；撤销该修复不会消除聊天模型依赖。受控 revert 入口仅支持非合并提交，不能直接对 merge commit 指定 mainline；本轮未执行撤销。
+- 根提交 daab1ee 的 main.py 已写死 Qwen/Qwen3-0.6B 并调用 apply_chat_template；早期 SFT 也使用普通版模型。因此不存在一个历史版本可直接用作 Base 项目。
+- 41ad57a 同时引入 think 格式与输出目录避重，33a81f1 同时引入 LoRA、低精度冻结权重、保存恢复、短测及普通版配置。通用工程能力与旧模型假设混在这些历史提交中。建议按旧业务文件边界形成一次明确撤销提交，再另提交 Base 重写；既有 Git 约定和独立工具不回退。
+- [Base 官方 tokenizer_config](https://huggingface.co/Qwen/Qwen3-4B-Base/blob/main/tokenizer_config.json) 当前含 chat_template，eos_token 为 endoftext。更准确的区别是预训练权重尚未学会该聊天格式；是否调用模板是项目选择，不是“Base 只能输出 token、聊天版不是 token”的区别。两者都是因果语言模型。
+- [Transformers 因果语言模型文档](https://huggingface.co/docs/transformers/tasks/language_modeling)说明训练预测下一个 token。纯文本 SFT 应将题目提示和标准解答拼接，屏蔽提示与 padding，只在标准解答及 EOS 上计算词元交叉熵；标签保持与输入等长，由模型移位。预先 generate 再比较离散 token / 字符串不属于当前要实现的标准 SFT。
+- 当前建议的 Question/Answer 前缀、保留原 answer 中 #### 与计算器注释、追加 EOS 已写入可评审草案。保留 #### 与此前“移除 ####”的约定不同，等待用户确认后更新权威要求文档；没有直接修改业务格式。
+- 第一次通过网页工具读取 Base 原始 tokenizer_config / generation_config 链接不可访问，随后以官方 blob 页面核实模板和 EOS；未下载权重或执行模型。
+
+## GSM8K 实验起点调查（2026-10-28，已完成代表性核查）
+
+- 调查口径：区分实验直接起点与训练后成品；RL 起点与整个流水线最初的 Base 也分别记录。GSM8K 仅作评测的论文不能据此视为在 GSM8K 上微调。论文中的 base model 可能只表示当前对照或起点，分类需看实际 ID 和模型来源。
+- 结论：仅预训练起点与已有后训练起点均有明确的一手实例，SFT 并不要求起点未经官方后训练，RL 的直接起点也不能由整条流水线的起点推断。此前推荐 Base 应限定为服务完整阶段研究的候选路线，不能将现有普通版实验称为模型选错，或声称改用 Base 必然更容易提升。本调查没有修改选型决定。
+- 调查是目的性选择的代表性来源，覆盖论文与官方框架示例，不用于估计全领域的数量占比。框架提供脚本不等于一篇独立效果论文；不同训练数据、提示、输出预算、答案提取和采样次数的分数不直接横比。
+- 已核实：[MetaMath 作者仓库](https://github.com/meta-math/MetaMath) 的训练命令是 meta-llama/Llama-2-7b-hf，而非 chat；MetaMathQA 是 GSM8K / MATH 训练题增强数据，不是只使用原始 7473 条。
+- 已核实：[DeepSeekMath 论文](https://arxiv.org/html/2402.03300v3) 第 3 节从 DeepSeekMath-Base 7B 做数学 SFT，数据含 GSM8K、MATH 等；第 4.2 节 GRPO 的直接起点为 DeepSeekMath-Instruct 7B，RL 使用 SFT 数据中的约 144K 条 GSM8K / MATH 相关问题。整条流程起点为 Base，不能把 GRPO 直接起点也归成未经 SFT 的 Base。
+- 已核实：[verl 官方算法基线](https://github.com/verl-project/verl/blob/main/docs/algo/baseline.md) 明确记录 google/gemma-2-2b-it 的原模型 / SFT / SFT+PPO，以及 Qwen/Qwen2.5-0.5B-Instruct、1.5B-Instruct、3B-Instruct 等 GRPO-LoRA 实验；已有后训练版本也被用于完整的 SFT 再 RL 比较。
+- 已核实：[SkyRL 官方 GSM8K 快速开始](https://docs.skyrl.ai/docs/getting-started/quickstart) 将策略初始化为 Qwen/Qwen2.5-1.5B-Instruct，直接进行 GRPO；这是框架示例，不视为一篇独立效果论文。
+- 已核实：[verl 当前 Qwen3 GRPO 脚本](https://github.com/verl-project/verl/blob/main/examples/grpo_trainer/run_qwen3_8b_fsdp.sh) 默认 MODEL_PATH 为 Qwen/Qwen3-8B，训练数据为 gsm8k/train.parquet + math/train.parquet，adv_estimator=grpo。这是普通混合思考后训练版，不是 Qwen3-8B-Base；脚本可说明公开用法，不能当作本项目单卡 32 GB 配方或已复现收益。
+- 已核实：[ReFT 论文](https://arxiv.org/html/2401.08967v1) 第 4.3 节使用 Galactica-6.7B 和 CodeLlama-7B，原始起点为预训练模型；[官方 GSM8K SFT 脚本](https://github.com/lqtrung1998/mwp_ReFT/blob/main/exps/paper_exps/SFT/gsm8k.sh) 明确 CodeLlama-7b-hf / galactica-6.7b。ReFT 先做 SFT 预热，再对同一训练题做 PPO。解题标注包含 GPT-3.5-turbo 生成的自然语言及程序推理，不能误认为教师 GPT-3.5 就是训练起点，也不能直接等同当前原始 GSM8K 解答。另有 125M 模型实验，此处主表只列主要模型。
+- 已核实：[CoT Prompting 论文](https://arxiv.org/html/2201.11903v6) 第 3.1 节列出 PaLM 8B / 62B / 540B 及其他模型，通过提示提供少量示例，不做任务梯度更新；GSM8K 在这里用于推理方法评测。论文还涉及作者认为对应 InstructGPT 的 API 版本，因此不能把所有列出的 GPT 模型笼统归成纯预训练模型。主表中的训练路线与此类提示实验分开说明。
+- [Qwen3-8B 官方模型卡](https://huggingface.co/Qwen/Qwen3-8B/raw/main/README.md) 明确标注 Pretraining & Post-training，支持对 verl Qwen3 默认脚本的归类；[Gemma 2 官方模型卡](https://huggingface.co/google/gemma-2-2b-it) 区分 pre-trained 与 instruction-tuned 版本，verl 的 it 起点属于后者。
+- 调查中 MetaMath 原始 README.md 请求 404，作者仓库实际文件名为 README.MD，已通过仓库正文获得原始命令。所有研究仅访问文本来源，未加载模型、执行训练或修改运行配置。
+
+### 代表性训练路线对照
+
+| 来源 | 训练起点与类别 | GSM8K 用途与后续阶段 |
+| --- | --- | --- |
+| MetaMath（2023） | Llama 2 预训练版本；官方示例为 Llama-2-7b-hf | GSM8K / MATH 训练题增强后组成 MetaMathQA，进行 SFT。 |
+| ReFT（2024） | Galactica-6.7B / CodeLlama-7b-hf，预训练版本 | GSM8K 训练题及生成解题标注，SFT 预热 → PPO；PPO 直接起点已经过自己的 SFT。 |
+| DeepSeekMath SFT（2024） | DeepSeekMath-Base 7B，经过数学继续预训练的 Base | 包含 GSM8K / MATH 等的数学 SFT，得到 Instruct。 |
+| DeepSeekMath GRPO（2024） | DeepSeekMath-Instruct 7B，已有数学 SFT | GSM8K / MATH 相关训练问题进行 GRPO，得到 RL；论文报告无工具 Top1 GSM8K 从 82.9% 到 88.2%，是其自身设置下结果。 |
+| verl Gemma 基线 | google/gemma-2-2b-it，已有官方指令后训练 | 在 GSM8K 上再做 SFT → PPO，记录原版、SFT、SFT+PPO。 |
+| verl GRPO-LoRA 基线 | Qwen2.5-0.5B / 1.5B / 3B / 7B-Instruct，已有官方后训练 | GSM8K 上的 GRPO-LoRA；与本项目小模型、LoRA、后续 RL 的工程条件较接近。 |
+| SkyRL 官方入门 | Qwen2.5-1.5B-Instruct，已有官方后训练 | 直接做 GSM8K GRPO；属于框架示例。 |
+| verl 当前 Qwen3 示例 | Qwen3-8B，已有官方混合思考后训练 | GSM8K + MATH 上 GRPO；属于官方脚本，不能据此声称已复现或适合单卡。 |
+
+### 对本项目的判断
+
+- 若主要研究自己从预训练权重开始的 SFT 与后续 RL 各自效果，Base → 自己的 SFT → 自己的 GRPO 是有文献依据的方案；已有后训练模型 → 自己的 SFT → 自己的 RL 也有官方基线实例，仍然能完成阶段比较。
+- 若主要研究 RL 目标、奖励、采样或 LoRA 更新，在 Instruct / 混合思考版上继续训练同样有公开先例，不能仅因其经过官方后训练而排除。是否已接近该评测上限应实测基线，不能从模型标签推断。
+- 当前仍待用户选定主线；本轮将此前“推荐 Base”表述限定为项目目标下的取舍，而非 GSM8K 的统一最佳实践。更换起点与否，都应固定评测并区分格式遵循、答案正确、推理预算和数据增强的影响。
+
+## 训练起点：Base 与官方后训练版本（2026-10-28）
+
+- 用户指出当前起点已经过官方后训练，希望为实习项目评估未经官方后训练的版本。当前 configs 中分别是 Qwen/Qwen3-0.6B、Qwen/Qwen3-4B、Qwen/Qwen3-8B；“原始模型”一直表示本项目训练前的起点，不能据此推断它没有经过官方后训练。CONTEXT.md 已补充 Base、官方后训练模型与适配器底座的区别，未改变起点选择。
+- [普通 4B 官方模型卡](https://huggingface.co/Qwen/Qwen3-4B/raw/main/README.md) 标注 Training Stage: Pretraining & Post-training；[4B-Base 官方模型卡](https://huggingface.co/Qwen/Qwen3-4B-Base/raw/main/README.md) 标注 Pretraining。[官方概念说明](https://github.com/QwenLM/Qwen3/blob/main/docs/source/getting_started/concepts.md) 区分 Base 与混合思考版本，Base 权重尚未学会预定义聊天格式。Base 已有预训练能力，预训练也含数学、推理和合成数据，不是从随机权重开始，不能假定评测数据从未被见过。
+- 项目目标明确侧重可复现的 SFT / GRPO 实验、理解算法与验证结论，不预设性能提升。评估建议：训练机以 Qwen/Qwen3-4B-Base 做正式主线，开发机后续考虑对应 0.6B-Base；旧普通版结果保留为参照。该建议基于学习完整阶段的目标，不是认定已后训练版本不能再改善专项表现；从 Base 出发也不保证提升或超过官方版本。用户尚未确认改选。
+- 实验候选结构为 Base → GSM8K SFT → 后续 GRPO，统一题目、答案提取、评测预算与随机设置；官方后训练版只作独立参照。Base 的聊天格式遵循与数学正确性应分别核对；如果需要 few-shot 诊断 Base 的已有解题能力，应另列条件，避免把提示设置变化误记为训练收益。调参使用从训练集固定划出的验证集，官方测试集保留作最终评测；当前项目尚无此完整评测入口。
+- 只读审计核对 [Base tokenizer_config](https://huggingface.co/Qwen/Qwen3-4B-Base/blob/main/tokenizer_config.json)：文件当前确实带 chat_template、enable_thinking 分支及 think 标记。不能声称 Base 缺少模板或 apply_chat_template 必然报错；模板文件存在不等于模型已学会聊天和思考开关。若保留既定思考段监督，应将格式视为本项目 SFT 要教的目标，不把普通版官方思考开关与采样建议直接当作 Base 已有能力或最佳参数。
+- [Base config](https://huggingface.co/Qwen/Qwen3-4B-Base/raw/main/config.json) 的 max_position_embeddings=32768。sample_checkpoint.py 默认 max_new_tokens=32768，并在生成前检查题目与输出预算总和；因此非空题目下只替换成 Base ID 会在该检查处失败，需要明确 Base 的输出预算并记录为实验设置。
+- [Base generation_config](https://huggingface.co/Qwen/Qwen3-4B-Base/blob/main/generation_config.json) 默认结束符为 endoftext（151643），但模板助手结尾为 im_end（151645），prepare_sft_data.py 当前监督后者，sample_checkpoint.py 未覆盖生成停止条件。后续适配须统一训练结尾、生成停止与截断判定，并确保适配器抽样能恢复相同设置；当前未实施。
+- Base 与普通版 4B 的主要架构和投影尺寸一致，已有 PEFT LoRA 目标层与显存方案可复用，Base 不因省去官方后训练而显著减少显存。r16 / alpha32 / dropout0.05 / lr1e-4 / 三轮可暂作为候选起始配方，需由验证集决定，不是对 Base 的最佳值承诺。正式规模仍推荐 4B，8B 待有明确实验需要再评估，尤其后续 GRPO 的采样成本。
+- 旧 LoRA checkpoint 绑定普通版底座，现有 sft_runtime.py 会检查续训的底座标识。切换 Base 应建立新的适配器与独立实验目录，不能修改底座名后接续旧优化器状态。已有工程与实验仍可用于加载验证和参照，不因改选而删除。
+- 本轮依据官方小型文本文件和本地代码给出评估；未下载模型权重、运行真实 Base 问答、启动训练或改配置。默认预算越界是配置与代码推导，实际收敛、格式遵循、显存峰值、正确率及 GRPO 收益均未验证。
+
 ## 原始模型加载错误（2026-10-28）
 
 - 用户将仓库名写成 Qwen3-4B，导致 https://huggingface.co/Qwen3-4B/ 下的文件查找 404；本项目官方起点为 Qwen/Qwen3-4B，缓存同样依赖完整仓库名。
