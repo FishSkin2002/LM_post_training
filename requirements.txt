@@ -4,4 +4,5 @@ datasets==5.1.0
 accelerate==1.15.0
 peft==0.21.0
 PyYAML==6.0.3
+tensorboard==2.21.0
 Brotli==1.2.1
