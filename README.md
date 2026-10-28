@@ -6,8 +6,9 @@
 .
 ├── prepare_sft_data.py          # 检查 GSM8K 样本、聊天模板与损失标签
 ├── train_sft.py                 # 新训练、断点续训、完成后加训
+├── evaluate_checkpoint.py       # 手动或训练结束后的生成指标评测
 ├── sample_checkpoint.py         # 原始 Base 或 LoRA 产物抽样问答
-├── training_workflow.py         # 数据划分、运行状态与生成验证
+├── training_workflow.py         # 数据划分、运行状态与终端展示
 ├── configs/
 │   ├── development/sft.yaml     # 开发机：Qwen3-0.6B-Base
 │   └── training/
@@ -19,6 +20,7 @@
 │   │   ├── checkpoint-<step>/  # 完整训练断点，最多保留最近两个
 │   │   ├── final/              # 适配器、分词器与运行信息
 │   │   ├── runs/               # 本次运行的 TensorBoard 事件
+│   │   ├── evaluations/        # 生成指标及逐题结果 JSON 报告
 │   │   └── trainer_state.json  # Trainer 训练进度与日志
 │   └── samples/                # 抽样问答 Markdown 报告
 ├── docs/                       # 项目目标、训练与协作约定
@@ -67,6 +69,10 @@ python train_sft.py
 
 默认使用训练机 4B-Base 配置。配置中的模型、轮次、学习率、批量、LoRA 参数与保存/验证频率均可直接修改；模型保持 FP32，只训练 LoRA。
 
+训练过程只计算验证 loss。正常结束后先保存 `final/` 和训练状态，再自动计算一次完整验证集的生成指标，报告写入本次运行的 `evaluations/final-n748.json`（题数随验证集大小变化）。评测复用已有模型；若评测失败或中断，可用下面的独立脚本重新评测已保存的最终模型。
+
+终端阶段说明使用英文，包括 `Training`、`Validation loss`、`Generate validation answers`。指标采用 `Training | loss=... | grad_norm=... | learning_rate=... | epoch=...`，TensorBoard 中仍保存原始数值。
+
 可选参数：
 
 | 参数 | 可填项／默认行为 | 用途 |
@@ -81,6 +87,8 @@ python train_sft.py --resume-from-checkpoint /path/to/run/checkpoint-500
 ```
 
 使用实际保留的、尚未完成原计划的 `checkpoint-*`。恢复模型、优化器、调度器、随机状态和进度，沿用原数据划分、训练计划及 TensorBoard 曲线；必要状态缺失会在加载模型前报错。
+
+Ctrl+C 不会额外保存中断时刻的状态；续训从最近完整断点开始。已完成的训练使用独立评测脚本计算指标，或使用下一用途开启加训。
 
 可选参数：
 
@@ -105,6 +113,43 @@ python train_sft.py --continue-from /path/to/previous/final --additional-epochs 
 | `--output-dir` | 目录路径；默认使用配置的输出目录并自动避重 | 选择新阶段的独立目录。 |
 
 `--additional-epochs` 为该用途必填的正数，可填小数；它表示新阶段的追加轮次，不是累计总轮次。`--continue-from` 与 `--resume-from-checkpoint` 互斥。
+
+### evaluate_checkpoint.py
+
+#### 评测一个 checkpoint 或 final 的完整验证集
+
+```bash
+python evaluate_checkpoint.py --checkpoint /path/to/run/final
+```
+
+也可填写训练中保存的 `checkpoint-500` 等目录。读取该产物的 `run.json`，校验数据并沿用原来的验证划分；不更新权重、优化器或训练步数。未指定题数时评测完整验证集，默认划分约 748 题，不使用 test。
+
+可选参数：
+
+| 参数 | 可填项／默认行为 | 用途 |
+| --- | --- | --- |
+| `--num-samples` | `1` 到验证集题数的整数；默认全量 | 限制评测题数，超出范围会报错。 |
+| `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
+| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 指定报告位置；相同路径的已有报告会被覆盖。 |
+
+#### 用相同题目子集比较训练断点
+
+```bash
+python evaluate_checkpoint.py --checkpoint /path/to/run/checkpoint-1000 --num-samples 32
+```
+
+替换 checkpoint 路径并保持相同题数，可比较不同训练阶段。使用验证集固定顺序的前 N 题，`32` 可替换为合法题数；分母和实际索引随报告保存。小样本结果用于观察趋势。
+
+可选参数：
+
+| 参数 | 可填项／默认行为 | 用途 |
+| --- | --- | --- |
+| `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
+| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 保存本次比较报告；相同路径会被覆盖。 |
+
+两种用途均只从本地 checkpoint 和模型缓存加载，需保留分词器与对应 Base 权重。生成使用贪心解码、1024-token 上限和训练时保存的聊天模板，输入不含标准解答。
+
+报告包含生成正确率、格式有效率、截断率、题数、耗时、吞吐、来源、题目索引和逐题生成结果。恰有一个 `####` 且其后仅为最终数值才算格式有效；合法千位逗号和小数按精确数值比较，`5.0` 与 `5` 相等。格式不合格或截断计错，分母包括所有评测题。详细口径见 [训练运行约定](docs/training-workflow.md)。
 
 ### sample_checkpoint.py
 
@@ -165,18 +210,13 @@ tensorboard --logdir /root/autodl-tmp/outputs/training
 | `--port` | 可用端口号；默认 `6006` | 选择 TensorBoard 服务端口。 |
 | `--host` | 监听地址，如 `127.0.0.1`、`0.0.0.0`；默认由 TensorBoard 选择本地地址 | 指定服务监听地址。 |
 
-训练指标默认每 10 步记录，验证和保存默认每 500 步进行。train 固定划出 10% 作验证（seed=42），test 留作最终评测；验证 loss 始终全量计算，定期生成固定 128 条，结束时生成完整验证集。
+训练指标默认每 10 步记录，验证 loss 和保存默认每 500 步进行。train 固定划出 10% 作验证（seed=42），test 留作最终评测；验证 loss 始终全量计算。训练期间不监控生成正确率，生成结果写入独立评测报告。
 
 | 曲线 | 含义 |
 | --- | --- |
 | `train/loss`、`train/grad_norm`、`train/learning_rate`、`train/epoch` | 区间平均训练损失、记录步的裁剪前梯度范数、学习率、训练轮次。 |
 | `eval/loss` | 标准答案条件下的验证损失，不是数学答案正确率。 |
-| `eval/answer_accuracy`、`eval/answer_format_rate`、`eval/generation_truncation_rate` | 固定生成子集的正确率、格式有效率、截断率。 |
-| `eval/generation_samples`、`eval/generation_runtime`、`eval/generation_samples_per_second` | 生成评测实际题数、耗时、吞吐。 |
-| `eval/full_*` | 训练结束时完整验证集的对应生成指标，与固定子集分开记录。 |
-| `eval/runtime`、`eval/samples_per_second` | 验证阶段总耗时与原生吞吐记录。 |
-
-生成正确率要求恰有一个 `####`、其后仅为最终数值；合法千位逗号和小数按精确数值比较，`5.0` 与 `5` 相等。格式不合格或截断计错，分母包括所有评测题。详细口径见 [训练运行约定](docs/training-workflow.md)。
+| `eval/runtime`、`eval/samples_per_second` | 验证 loss 的耗时与吞吐记录，不包含结束后独立生成评测。 |
 
 ### tools/test_base_sft.py
 
@@ -186,7 +226,7 @@ tensorboard --logdir /root/autodl-tmp/outputs/training
 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_base_sft.py
 ```
 
-使用临时随机微型模型和合成样本，核对模板、续训、加训、日志、目录和生成判定；不加载真实 Base 权重。
+使用临时随机微型模型和合成样本，核对模板、续训、加训、日志、目录、独立评测及结束调用；不加载真实 Base 权重。
 
 可选参数：
 

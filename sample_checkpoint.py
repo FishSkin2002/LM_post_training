@@ -10,6 +10,7 @@ from datasets import disable_progress_bars, load_dataset
 from peft import PeftConfig, PeftModel
 from transformers import AutoModelForCausalLM
 from transformers.utils import logging
+from tqdm.auto import tqdm
 
 from prepare_sft_data import load_tokenizer, require_base_model
 
@@ -83,7 +84,7 @@ def main():
         f"- 数据：`openai/gsm8k/main/{args.split}`\n- 抽题种子：{args.seed}；索引：{indices}\n"
         f"- 贪心生成；max_new_tokens：{args.max_new_tokens}；精度：FP32\n",
     ]
-    for index in indices:
+    for index in tqdm(indices, desc="Generate sample answers", unit="question"):
         row = dataset[index]
         answer, count, truncated = generate_answer(model, tokenizer, row["question"], args.max_new_tokens)
         status = "达到生成上限，回答可能未结束" if truncated else "正常结束"

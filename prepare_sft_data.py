@@ -60,9 +60,9 @@ def main():
     tokenizer = load_tokenizer(config["model_name"])
     row = load_dataset("openai/gsm8k", "main", split="train")[0]
     example = build_sft_example(tokenizer, row["question"], row["answer"])
-    print("【完整训练输入】")
+    print("Complete training input")
     print(tokenizer.decode(example["input_ids"], skip_special_tokens=False))
-    print("【参与损失的文本】")
+    print("Supervised text")
     print(tokenizer.decode([value for value in example["labels"] if value != IGNORE_INDEX],
                            skip_special_tokens=False))
     print("input_ids:", example["input_ids"])

@@ -2,7 +2,22 @@
 
 ## 当前小步
 
-用户已确定取消训练中生成监控，独立评测脚本支持选择 checkpoint/题数，训练正常结束自动全量评测，终端统一英文。按 Git 约定先在 codex/separate-generation-evaluation-policy 更新要求文档，交付独立 PR；其合入后再从最新 main 开始功能实现。本轮不再询问已确定的行为。
+用户已关闭 PR #18、合并 PR #19，并要求先用 writing-for-agents 明确 PR 决定权和 gh 范围，再实现 PR #19。规则改动已通过独立 PR #20 交付；当前在从已合入 PR #19 的最新 main 创建的 codex/standalone-generation-evaluation 实施功能。Git 按受控入口管理，gh 只发起 PR，不检查重复/冲突或代办接受/拒绝。
+
+## 用户独占 PR 决定权与独立评测实现
+
+| 阶段 | 状态 | 完成条件 |
+| --- | --- | --- |
+| 核实远端状态 | complete | PR #18 为 CLOSED，PR #19 已合入 e0ee7d3；工作树起始干净。 |
+| 更新 PR 权限规则 | complete | writing-for-agents 已应用；PR #20 已交付并追加“Git 由 Codex 管理、gh 仅 pr create，PR 重复/冲突与决定由用户处理”的规则。 |
+| 实现 PR #19 | complete | 已移除训练中生成，独立评测支持 checkpoint/final 与固定题数，保存后自动全量评一次，英文进度及非字典日志已接入。 |
+| 验证与交付功能 | complete | 14 项微型模型检查、四个脚本 19 项参数/README 链接、7473 条缓存参考答案/划分、编译及差异检查通过；提交 2398c24 已推送，功能 PR #21 已创建并附加。 |
+
+### 本轮交付
+
+[PR #20](https://github.com/FishSkin2002/qwen/pull/20) 单独交付 writing-for-agents 整理的 Git/gh 职责边界；[PR #21](https://github.com/FishSkin2002/qwen/pull/21) 交付 PR #19 的独立生成评测、训练结束调用、英文终端及 README。两项工作按本轮明确顺序完成。Codex 只创建 PR，未操作 PR 的接受、拒绝或状态，也未在用户补充 gh 边界后核查冲突/重复。后续审查和决定由用户操作；没有运行真实 Base 训练。
+
+## 上一小步：独立评测要求交付
 
 ## 独立生成评测与英文终端要求
 
