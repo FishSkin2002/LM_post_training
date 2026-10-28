@@ -1,4 +1,4 @@
-"""Build and inspect GSM8K SFT examples without loading model weights."""
+"""Build and inspect GSM8K examples for Qwen3 Base LoRA SFT."""
 
 import argparse
 from pathlib import Path
@@ -9,79 +9,62 @@ from transformers import AutoTokenizer
 
 
 CONFIG_DIR = Path(__file__).resolve().parent / "configs"
-COMMON_CONFIG = yaml.safe_load((CONFIG_DIR / "common.yaml").read_text(encoding="utf-8"))
 IGNORE_INDEX = -100
+CHAT_TEMPLATE = (
+    "{% for message in messages %}"
+    "{{ '<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' }}"
+    "{% if not loop.last or add_generation_prompt %}{{ '\\n' }}{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}"
+)
 
 
-def load_machine_config(config_path: Path) -> dict:
-    """Read model selection and training parameters from one machine YAML."""
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    if not isinstance(config, dict):
-        raise ValueError("Machine configuration must be a YAML mapping.")
-    if not isinstance(config.get("model_name"), str) or not config["model_name"].strip():
-        raise ValueError("Machine configuration must specify a nonempty model_name.")
+def require_base_model(model_name):
+    if not (model_name.startswith("Qwen/Qwen3-") and model_name.endswith("-Base")):
+        raise ValueError("Use a Qwen3 Base repository ID, such as Qwen/Qwen3-4B-Base.")
+
+
+def load_config(path):
+    config = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    require_base_model(config["model_name"])
     return config
 
 
-def format_gsm8k_answer(answer: str) -> str:
-    """Separate the reference reasoning and result without changing their text."""
-    if answer.count("####") != 1:
-        raise ValueError("GSM8K answer must contain exactly one #### separator.")
-    reasoning, final_answer = (part.strip() for part in answer.split("####", 1))
-    if not reasoning or not final_answer:
-        raise ValueError("GSM8K answer must contain both reasoning and a final result.")
-    return f"<think>\n{reasoning}\n</think>\n\n{final_answer}"
+def load_tokenizer(source, *, local_files_only=False):
+    tokenizer = AutoTokenizer.from_pretrained(source, local_files_only=local_files_only)
+    tokenizer.chat_template = CHAT_TEMPLATE
+    return tokenizer
 
 
-def build_sft_example(tokenizer, question: str, answer: str) -> dict[str, list[int]]:
-    """Supervise the reference reasoning, result and assistant end marker."""
+def build_sft_example(tokenizer, question, answer):
     messages = [{"role": "user", "content": question}]
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        enable_thinking=COMMON_CONFIG["enable_thinking"],
-        return_dict=True,
+    prompt_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_dict=False)
+    input_ids = tokenizer.apply_chat_template(
+        messages + [{"role": "assistant", "content": answer}],
+        add_generation_prompt=False, return_dict=False,
     )
-    encoded = tokenizer.apply_chat_template(
-        messages + [{"role": "assistant", "content": format_gsm8k_answer(answer)}],
-        tokenize=True,
-        add_generation_prompt=False,
-        enable_thinking=COMMON_CONFIG["enable_thinking"],
-        return_dict=True,
-    )
-    input_ids = encoded["input_ids"]
-    prompt_ids = prompt["input_ids"]
-    if input_ids[: len(prompt_ids)] != prompt_ids:
-        raise ValueError("The prompt must be an exact token prefix of the full example.")
+    if input_ids[:len(prompt_ids)] != prompt_ids:
+        raise ValueError("The question prompt must be an exact token prefix of the training example.")
     return {
         "input_ids": input_ids,
-        "attention_mask": encoded["attention_mask"],
-        "labels": [IGNORE_INDEX] * len(prompt_ids) + input_ids[len(prompt_ids) :],
+        "attention_mask": [1] * len(input_ids),
+        "labels": [IGNORE_INDEX] * len(prompt_ids) + input_ids[len(prompt_ids):],
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config", type=Path, default=CONFIG_DIR / "development" / "sft.yaml",
-        help="Machine configuration YAML (default: configs/development/sft.yaml).",
-    )
+    parser.add_argument("--config", type=Path, default=CONFIG_DIR / "development/sft.yaml")
     args = parser.parse_args()
-    try:
-        config = load_machine_config(args.config)
-    except (OSError, yaml.YAMLError, ValueError) as error:
-        parser.error(f"Cannot read configuration: {error}")
-    print(f"Model: {config['model_name']} | Configuration: {args.config}", flush=True)
-    dataset = load_dataset(**COMMON_CONFIG["dataset"])
-    tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
-    row = dataset[0]
+    config = load_config(args.config)
+    tokenizer = load_tokenizer(config["model_name"])
+    row = load_dataset("openai/gsm8k", "main", split="train")[0]
     example = build_sft_example(tokenizer, row["question"], row["answer"])
-    supervised_ids = [label for label in example["labels"] if label != IGNORE_INDEX]
     print("【完整训练输入】")
     print(tokenizer.decode(example["input_ids"], skip_special_tokens=False))
     print("【参与损失的文本】")
-    print(tokenizer.decode(supervised_ids, skip_special_tokens=False))
+    print(tokenizer.decode([value for value in example["labels"] if value != IGNORE_INDEX],
+                           skip_special_tokens=False))
     print("input_ids:", example["input_ids"])
     print("labels:", example["labels"])
 
