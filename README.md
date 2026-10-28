@@ -20,7 +20,7 @@
 │   │   ├── checkpoint-<step>/  # 完整训练断点，最多保留最近两个
 │   │   ├── final/              # 适配器、分词器与运行信息
 │   │   ├── runs/               # 本次运行的 TensorBoard 事件
-│   │   ├── evaluations/        # 逐题追加 JSONL 与最终汇总 JSON
+│   │   ├── evaluations/        # 逐题 Markdown 阅读版、JSONL 进度与汇总 JSON
 │   │   └── trainer_state.json  # Trainer 训练进度与日志
 │   └── samples/                # 抽样问答 Markdown 报告
 ├── docs/                       # 项目目标、训练与协作约定
@@ -154,6 +154,8 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/checkpoint-1000 --num-sa
 两种用途均只从本地 checkpoint 和模型缓存加载，需保留分词器与对应 Base 权重。生成使用贪心解码、1024-token 上限和与训练共用的普通文本提示；输入止于 `Answer:` 后的换行，不含标准解答，输出原生 EOS 时结束。
 
 每生成完一题就向 `.progress.jsonl` 追加并刷新一条记录，例如 `checkpoint-1000-n32.progress.jsonl`；完成后另写 `checkpoint-1000-n32.json` 汇总。每条记录包含问题原文 `question`、清理后的完整标准解答 `reference_answer`、模型回答 `answer`，以及题目索引、token 数、判分、截断状态和该题耗时，方便对照。
+
+阅读时打开同目录的 `checkpoint-1000-n32.md`，不必直接查看 JSONL。Markdown 按题编号，分段展示问题、标准解答、模型回答及判分结果，正文保留真实换行，`####` 等文本按原样显示。每完成一题就同步写入并刷新，评测尚未结束也可查看；重跑时先从已有 JSONL 记录重建阅读版，再继续追加，因此更新前已保存的回答也会包含在内。`--output` 自定义路径时，阅读版使用相同基础文件名和 `.md` 后缀。
 
 中断后直接重新执行同一条命令，保持 checkpoint、题数和输出路径一致。脚本读取已有 N 条记录，从固定顺序的第 N+1 题继续；终端显示已完成数，进度条从该位置开始，不需要续跑开关。已保存的错误或截断回答同样复用，已有记录全部完成时不再生成。训练结束自动评测也使用同一保存方式。
 
