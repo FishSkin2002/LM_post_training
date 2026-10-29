@@ -1,5 +1,13 @@
 # 进展记录
 
+## 2026-10-29：实现Instruct/OpenR1主线
+
+- 用户表示“完成”后，受控start获取最新main d89aa92并建立codex/openr1-instruct-sft；Git提交关系确认要求6ee878d已经合入。既有研究记录保留，未查询PR内容或评审。
+- 实现统一math_data入口、R1轨迹筛选及分组、原生system/user/assistant与完整标签边界，四入口共享数据准备。训练接入已批准的BF16底座/计算、FP32 LoRA和非重入检查点；boxed与固定Math-Verify只用于生成评分。旧Base来源拒绝恢复，GSM8K读取接口及既有运行/续跑行为保留。
+- 22项随机微型Qwen/LoRA集成测试通过（最终完整运行5.698秒）；覆盖真实参数更新/精确续训/加训、FP32 LoRA/BF16底座梯度、掩码/EOS、来源校验、原始/零LoRA一致、缓存恢复、终端/TensorBoard及JSONL续跑。四入口实际帮助与README参数、编译、2个本地文档链接及git diff --check通过。
+- 官方完整分词器与前20条无截断真实记录完成检查；nullable正确性字段和当前Transformers聊天分词返回值问题已修正。长度与本地评分限制见[样本检查记录](docs/research/openr1-data-smoke.md)；该记录不代表全量数据统计或模型性能。只在/tmp隔离安装新增数学判分依赖，未改变当前环境包集，未下载4B权重或启动真实训练。
+- 功能提交7df475c已通过受控入口正常推送，[PR #31](https://github.com/FishSkin2002/qwen/pull/31)已创建并附加；本轮新增计划/进展/发现记录与功能一同交付，较早未提交的研究记录独立保留。PR审查与合入由用户操作，下一小步为全量数据预算检查及训练前基线准备。
+
 ## 2026-10-28：实施普通文本 GSM8K 主线
 
 - 用户要求“可以了，开始吧”。已通过受控 start 从最新 main bcd07b0 创建 codex/plain-text-gsm8k，读取合入的最终约定；未调用 gh 检查 PR 状态。
