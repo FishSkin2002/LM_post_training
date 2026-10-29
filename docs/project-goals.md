@@ -1,4 +1,4 @@
-<!-- 需求来源：用户提供的 D:/Users/yunli/Desktop/项目目标.md，2026-10-24 导入；2026-10-28 按用户确认将项目一起点更新为 Qwen3 Base。具体数据与训练约定见 qwen3-base.md；当前执行范围以用户确认及 AGENTS.md 为准。 -->
+<!-- 需求来源：用户提供的 D:/Users/yunli/Desktop/项目目标.md，2026-10-24 导入；2026-10-29 按用户确认将项目一起点更新为 Qwen3-4B-Instruct-2507，并采用 OpenR1 的 R1 轨迹和原生聊天模板。具体数据与训练约定见 qwen3-base.md；当前执行范围以用户确认及 AGENTS.md 为准。 -->
 
 # 大模型算法实习项目规划
 
@@ -17,20 +17,20 @@
 
 ## 1. 项目目标
 
-基于 Qwen3 Base 和公开数学数据，实践 SFT 与 GRPO，研究后训练对模型数学推理能力的影响。
+基于 Qwen3-4B-Instruct-2507 和公开数学数据，实践 SFT 与 GRPO，研究本项目继续训练对模型数学推理能力的影响。
 
 ## 2. 技术路线
 
-基础模型：Qwen3 Base 系列，模型选择与样本格式见 [Base 训练约定](qwen3-base.md)。
+基础模型：Qwen/Qwen3-4B-Instruct-2507，使用其原生聊天模板；模型选择与样本格式见[模型与样本约定](qwen3-base.md)。
 
-数据集：GSM8K。
+数据集：以 OpenR1-Math-220k 的 R1 生成解答作为主 SFT 数据；保留 GSM8K 读取接口供测试等用途，后续 GRPO 考虑 Skywork-OR1-RL-Data。
 
 训练框架：PyTorch、Transformers、TRL。
 
 训练方法：
 
-1. 原始模型基线评测。
-2. 使用数学题及标准解答进行 SFT。
+1. 对未经本项目训练的同一官方 Instruct 模型做基线评测。
+2. 使用数学题及筛选后的 R1 完整解答进行 SFT，system 放固定任务和 boxed 格式要求，user 保留原题。
 3. 在 SFT 基础上尝试 GRPO，使用可验证的答案奖励。
 4. 统一评测原始模型、SFT 模型和 GRPO 模型。
 
