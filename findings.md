@@ -1,5 +1,13 @@
 # 环境发现
 
+## Instruct/OpenR1实现与验证（2026-10-29）
+
+- 当前功能实现与新运行来源为Qwen/Qwen3-4B-Instruct-2507、OpenR1 default/train和原生三消息模板；具体行为以math_data/prepare_sft_data及配置为准，已交付PR #31。旧Base产物继续留作历史资料，不用于新协议恢复。
+- 保存后的分词器加载路径会改变默认datasets函数指纹，padding/truncation运行状态也不应改变数据身份。编码阶段显式使用原始数据指纹、实际模板和移除临时padding/truncation状态后的底层分词器内容构造指纹；原始与保存后分词器的划分一致性已实际验证。
+- 当前Transformers 5.20.2的apply_chat_template分词默认可返回BatchEncoding，构建标签时必须使用return_dict=False取词元列表。真实数据允许某个正确性评判器整列为null；该值不算通过，字段不存在或非空数组错位仍报错。
+- 新数学依赖仅为测试安装到/tmp/qwen-openr1-test-deps；仓库requirements固定版本，现有环境包集保持。CUDA不可用，微型FP32实际训练及CPU BF16梯度验证通过，不据此声明4B显存、吞吐或数学准确率。
+- 官方原生模板、20条真实记录、长度统计及R1通过标签与本地评分不一致的边界，统一保存在[样本检查](docs/research/openr1-data-smoke.md)。8192仍是初始显式预算，正式训练前需要全量检查；原始Instruct与SFT对比保持同一预算和评分协议。
+
 ## 普通文本主线实现与验证（2026-10-28）
 
 - 当前实现从 main bcd07b0 的独立功能分支开始。prepare_sft_data 维护一个 PROMPT、clean_answer 和 TEXT_FORMAT；训练与验证共用build_sft_example，抽样/评测共用build_prompt。前缀与答案分别编码再拼接，确保训练输入前缀与生成输入词元一致，答案末尾显式追加一个原生EOS。

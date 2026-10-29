@@ -1,19 +1,34 @@
-"""Train a Qwen3 Base LoRA adapter on GSM8K answers without calculator annotations."""
+"""Train an Instruct LoRA adapter on selected OpenR1 reasoning trajectories."""
 
 import argparse
 import math
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoModelForCausalLM, DataCollatorForSeq2Seq, TrainingArguments, set_seed
 from transformers.integrations import TensorBoardCallback
 
-from prepare_sft_data import CONFIG_DIR, build_sft_example, load_config, load_tokenizer
+from prepare_sft_data import CONFIG_DIR, load_config, load_tokenizer, model_dtype, prepare_dataset, validate_precision
+from math_data import OPENR1
 from evaluate_checkpoint import evaluate_checkpoint
 from training_workflow import WorkflowTrainer, data_plan, new_run, read_source, reserve_directory, save_run
+
+
+def load_training_model(config, source_path=None):
+    model = AutoModelForCausalLM.from_pretrained(config["model_name"], dtype=model_dtype(config))
+    model.config.use_cache = False
+    if source_path:
+        model = PeftModel.from_pretrained(model, source_path, is_trainable=True, local_files_only=True)
+    else:
+        model = get_peft_model(model, LoraConfig(
+            task_type="CAUSAL_LM", target_modules="all-linear", **config["lora"],
+        ))
+    for parameter in model.parameters():
+        if parameter.requires_grad:
+            parameter.data = parameter.data.float()
+    return model
 
 
 def main():
@@ -30,14 +45,19 @@ def main():
         parser.error("--continue-from and --additional-epochs must be provided together.")
     if args.additional_epochs is not None and (not math.isfinite(args.additional_epochs) or args.additional_epochs <= 0):
         parser.error("additional-epochs must be a finite positive number.")
+    if config["data"]["name"] != OPENR1["name"]:
+        parser.error("The current SFT source is OpenR1; GSM8K remains a reading/evaluation interface.")
     source_path = args.resume_from_checkpoint or args.continue_from
     metadata = None
     step = None
     try:
         if source_path:
             source_path, metadata, step = read_source(source_path, config, resume=bool(args.resume_from_checkpoint))
-        dataset = load_dataset("openai/gsm8k", "main", split="train")
-        plan = data_plan(dataset, metadata)
+        device = "cpu" if config.get("use_cpu") else ("cuda" if torch.cuda.is_available() else "cpu")
+        validate_precision(config, device)
+        tokenizer = load_tokenizer(source_path or config["model_name"], local_files_only=bool(source_path))
+        dataset, data_info = prepare_dataset(config, tokenizer)
+        plan = data_plan(dataset, metadata, data_info)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
     if args.resume_from_checkpoint:
@@ -49,7 +69,7 @@ def main():
         epochs = args.additional_epochs if args.continue_from else config["num_train_epochs"]
         metadata = new_run(config, plan, epochs, source_path)
     save_run(output_dir, metadata)
-    settings = {key: value for key, value in config.items() if key not in ("model_name", "lora", "output_dir")}
+    settings = {key: value for key, value in config.items() if key not in ("model_name", "lora", "output_dir", "data", "max_length", "max_new_tokens")}
     settings["num_train_epochs"] = metadata["epochs"]
     training_args = TrainingArguments(
         **settings, output_dir=str(output_dir), logging_first_step=True, report_to="none",
@@ -57,22 +77,10 @@ def main():
     model_name = config["model_name"]
     print(f"Model: {model_name}\nOutput directory: {output_dir}", flush=True)
     set_seed(training_args.seed)
-    tokenizer = load_tokenizer(source_path or model_name, local_files_only=bool(source_path))
-    validation = dataset.select(plan["validation_indices"])
-
-    def tokenize(rows, description):
-        return rows.map(lambda row: build_sft_example(tokenizer, row["question"], row["answer"]),
-                        remove_columns=rows.column_names, desc=description)
-
-    train_dataset = tokenize(dataset.select(plan["train_indices"]), "Tokenize training split")
-    eval_dataset = tokenize(validation, "Tokenize validation split")
-    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float32)
-    if source_path:
-        model = PeftModel.from_pretrained(model, source_path, is_trainable=True, local_files_only=True)
-    else:
-        model = get_peft_model(model, LoraConfig(
-            task_type="CAUSAL_LM", target_modules="all-linear", **config["lora"],
-        ))
+    columns = ["input_ids", "attention_mask", "labels"]
+    train_dataset = dataset.select(plan["train_indices"]).select_columns(columns)
+    eval_dataset = dataset.select(plan["validation_indices"]).select_columns(columns)
+    model = load_training_model(config, source_path)
     model.print_trainable_parameters()
     writer = SummaryWriter(log_dir=str(output_dir / "runs"), purge_step=step + 1 if step is not None else None)
     trainer = WorkflowTrainer(
