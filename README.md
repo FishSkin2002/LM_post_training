@@ -4,63 +4,78 @@
 
 ```text
 .
-├── prepare_sft_data.py          # 检查普通文本提示、答案去注释与损失标签
+├── math_data.py                 # OpenR1/GSM8K统一读取、R1筛选与来源索引
+├── math_scoring.py              # boxed提取及Math-Verify数学等价判分
+├── prepare_sft_data.py          # 原生聊天包装、长度统计和assistant-only标签
 ├── train_sft.py                 # 新训练、断点续训、完成后加训
-├── evaluate_checkpoint.py       # 原始 Base、训练断点及结束后的生成指标评测
-├── sample_checkpoint.py         # 原始 Base 或 LoRA 产物抽样问答
-├── training_workflow.py         # 数据划分、运行状态与终端展示
+├── evaluate_checkpoint.py       # 原始Instruct或LoRA的同题生成评测
+├── sample_checkpoint.py         # 原始Instruct或LoRA抽样问答
+├── training_workflow.py         # 题目组划分、运行状态与终端展示
 ├── configs/
-│   ├── development/sft.yaml     # 开发机：Qwen3-0.6B-Base
+│   ├── development/sft.yaml     # Instruct数据检查及本地输出路径
 │   └── training/
-│       ├── sft.yaml             # 默认训练机：Qwen3-4B-Base
-│       └── sft-8b.yaml          # 可选：Qwen3-8B-Base
-├── outputs/                    # 本地运行后生成的产物
+│       ├── sft.yaml             # 主线Qwen3-4B-Instruct-2507/OpenR1配置
+│       └── sft-8b.yaml          # 历史Base配置，新版入口拒绝使用
+├── outputs/
 │   ├── development/<run>/
-│   │   ├── run.json            # 配置、文本格式、数据划分、加训来源
-│   │   ├── checkpoint-<step>/  # 完整训练断点，最多保留最近两个
-│   │   ├── final/              # 适配器、分词器与运行信息
-│   │   ├── runs/               # 本次运行的 TensorBoard 事件
-│   │   ├── evaluations/        # 逐题 Markdown 阅读版、JSONL 进度与汇总 JSON
-│   │   └── trainer_state.json  # Trainer 训练进度与日志
-│   ├── evaluations/            # 原始 Base 的 JSONL、Markdown 与汇总 JSON
-│   └── samples/                # 抽样问答 Markdown 报告
-├── docs/                       # 项目目标、训练与协作约定
+│   │   ├── run.json            # 模型、模板、数据、预算、精度和阶段来源
+│   │   ├── checkpoint-<step>/  # 完整断点，最多保留最近两个
+│   │   ├── final/              # LoRA、分词器、原生模板与运行信息
+│   │   ├── runs/               # TensorBoard事件
+│   │   ├── evaluations/        # 逐题JSONL、Markdown阅读版和汇总JSON
+│   │   └── trainer_state.json
+│   ├── evaluations/            # 原始Instruct的评测报告
+│   └── samples/                # 抽样问答Markdown
+├── docs/                       # 目标、训练和协作约定
 ├── tools/
-│   ├── test_base_sft.py         # 随机微型模型集成验证
-│   └── git_workflow.py          # 受控 Git 工具及相应测试
-├── requirements.txt            # Python 依赖
-├── AGENTS.md                   # 协作规则与文档入口
-├── CONTEXT.md                  # 领域术语
-├── task_plan.md                # 当前计划
-├── progress.md                 # 进展记录
-└── findings.md                 # 环境与实现发现
+│   ├── test_instruct_sft.py     # 随机微型模型离线集成检查
+│   ├── fixtures/               # 测试用固定版本官方模板
+│   └── git_workflow.py          # 受控Git入口及相应测试
+├── requirements.txt
+├── AGENTS.md
+├── CONTEXT.md
+├── task_plan.md
+├── progress.md
+└── findings.md
 ```
 
-训练机配置默认把产物写入 `/root/autodl-tmp/outputs/training/<run>/`，内部结构与上面的开发机运行目录相同。模型和数据的 Hugging Face 缓存位于仓库之外；适配器需要配合对应的 Base 权重使用。
-
-新训练和加训遇到同名目录或文件时，自动尝试 `原名-1`、`原名-2`，启动时显示实际目录；断点续训沿用原运行目录。`checkpoint-*` 包含优化器、调度器和随机状态，可恢复训练；`final/` 用于抽样或开启加训阶段。
+训练机默认产物目录为 `/root/autodl-tmp/outputs/training/qwen3-4b-instruct-openr1-lora/`；模型和数据缓存位于仓库之外。新训练和加训遇到重名目录或文件会自动加 `-1`、`-2`；续训沿用原目录。适配器必须与同一官方底座配合使用，旧Base运行产物保留但不进入新版恢复或评测。
 
 ## 主要脚本使用说明
 
-以下指令在项目根目录执行。先在相应 Python 环境运行 `python -m pip install -r requirements.txt`；示例中的 `/path/to/...` 替换为实际路径。
+在项目根目录先运行 `python -m pip install -r requirements.txt`。真实主线固定使用 `Qwen/Qwen3-4B-Instruct-2507`；配置默认BF16底座/计算、FP32 LoRA及非重入激活检查点，训练时关闭KV cache。真实训练需要支持BF16的CUDA设备；CPU/FP32只用于显式配置的随机微型接口检查。
 
 ### prepare_sft_data.py
 
-#### 检查一条训练样本及监督范围
+#### 检查数据、长度分布和监督标签
 
 ```bash
 python prepare_sft_data.py
 ```
 
-输出完整的普通文本数学提示、参与损失的解答和 token 标签。输入结构为简短英文说明、`Question: 问题` 和 `Answer:`；说明用“最终答案为 4 时写成 `#### 4`”的例子约束答案位置，不要求公式标记。
+首次按配置读取数据和分词器，之后可复用Hugging Face缓存。默认OpenR1的 `default/train`：逐条对齐正确性及完整性标记，每题取原列表首条合格R1轨迹；不训练上游 `solution`。正确性字段中的 `null` 视为未提供判定，至少一个评判器必须明确通过。无法解析参考终值、无合格轨迹的记录和超长记录分别统计。超长不截断；`max_length` 初始检查预算为8192，正式训练前先查看实际长度和保留数量，再决定是否调整配置。
 
-`answer` 删除整段 `<<...>>` 计算器注释，例如 `2+3=<<2+3=5>>5` 变为 `2+3=5`，其余推导与 `####` 原样保留。清理后的解答和一个原生 `<|endoftext|>` 接受监督；说明、题目、回答前缀和 padding 不计损失。训练和验证 loss 使用相同处理，原始数据文件保留。
+原生聊天结构为system固定指令、user原题、assistant完整R1解答：
+
+```text
+<|im_start|>system
+Solve the following math problem step by step.
+End your response with the final answer in \boxed{...}, for example \boxed{4}.<|im_end|>
+<|im_start|>user
+{problem原文}<|im_end|>
+<|im_start|>assistant
+{选中的R1完整解答}<|im_end|>
+```
+
+保留R1的LaTeX和think段；只监督assistant正文与一个im_end EOS，system/user/角色头/padding不计loss。生成只输入同一system/user和assistant起始头，不提供参考答案、不预填think。末尾格式换行不作额外监督目标。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | YAML 路径；默认 `configs/development/sft.yaml` | 选择模型对应的分词器，也可填写两份训练机配置或自定义配置。 |
+| `--config` | `configs/development/sft.yaml` | 选择数据来源、长度预算及模型分词器。 |
+
+GSM8K读取接口保留在 `math_data.py`；需测试时在自定义YAML的 `data` 中选择 `openai/gsm8k`、`config: main` 和对应split。保留原题、去掉整个 `<<...>>` 注释的完整参考解答与独立最终数值。新版主SFT入口仍限定OpenR1，不把GSM8K原解答伪造成R1轨迹。
 
 ### train_sft.py
 
@@ -70,159 +85,132 @@ python prepare_sft_data.py
 python train_sft.py
 ```
 
-默认使用训练机 4B-Base 配置。配置中的模型、轮次、学习率、批量、LoRA 参数与保存/验证频率均可直接修改；模型保持 FP32，只训练 LoRA。
+默认使用 `configs/training/sft.yaml`。先完成数据筛选、长度统计和按题目原文分组的固定划分，再加载模型；seed=42，10%题目组用于验证，同题不跨划分。配置显式保存长度和生成预算，原始模型与SFT比较时使用同一份配置和题目。
 
-本版采用普通文本格式，从原始 Base 开始新训练。恢复、加训、抽样和独立评测的来源须为当前格式保存的产物；旧聊天格式 checkpoint 不属于本版来源范围。`run.json` 记录并校验提示、答案清理规则和 EOS；训练产物不依赖聊天模板文件。
-
-训练过程只计算验证 loss。正常结束后先保存 `final/` 和训练状态，再自动计算一次完整验证集的生成指标，报告写入本次运行的 `evaluations/final-n748.json`（题数随验证集大小变化）。评测复用已有模型；若评测失败或中断，可用下面的独立脚本重新评测已保存的最终模型。
-
-终端阶段说明使用英文，包括 `Training`、`Validation loss`、`Generate validation answers`。指标采用 `Training | loss=... | grad_norm=... | learning_rate=... | epoch=...`，TensorBoard 中仍保存原始数值。
+训练只验证loss，默认每500步验证和保存、每10步记录，保留最近两个checkpoint。正常结束先保存final和状态，再复用已有模型做一次完整验证集生成评测；失败可独立重跑，不需加训。`run.json` 绑定模型、原生模板、system、数据指纹/索引、筛选规则、预算、精度和判分版本。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | 默认 `configs/training/sft.yaml`；也可填 `configs/development/sft.yaml`、`configs/training/sft-8b.yaml` 或自定义 YAML | 选择 0.6B / 4B / 8B 及训练设置。 |
-| `--output-dir` | 目录路径；默认使用配置中的 `output_dir` | 指定本次实验目录，重名时自动添加数字。 |
+| `--config` | `configs/training/sft.yaml` | 轮次、学习率、LoRA、数据、预算及频率设置。 |
+| `--output-dir` | 配置中的 `output_dir` | 新运行目录，重名自动避让。 |
 
-#### 从断点恢复未完成的训练
+#### 从完整断点恢复未完成的训练
 
 ```bash
 python train_sft.py --resume-from-checkpoint /path/to/run/checkpoint-500
 ```
 
-使用实际保留的、尚未完成原计划的 `checkpoint-*`。恢复模型、优化器、调度器、随机状态和进度，沿用原数据划分、训练计划及 TensorBoard 曲线；必要状态缺失会在加载模型前报错。
-
-Ctrl+C 不会额外保存中断时刻的状态；续训从最近完整断点开始。已完成的训练使用独立评测脚本计算指标，或使用下一用途开启加训。
+恢复优化器、调度器、随机状态和进度，沿用原数据与训练计划、目录及TensorBoard步数。缺少必要状态或来源不符时在加载权重前拒绝。Ctrl+C不会额外保存中断状态，从最近完整断点继续。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | YAML 路径；默认 `configs/training/sft.yaml` | 必须与该阶段原配置一致；加训阶段也使用启动该阶段时的配置。 |
-| `--output-dir` | 仅可填写 checkpoint 所属运行目录；默认自动使用该目录 | 通常不用填写，续训不分配新数字后缀。 |
+| `--config` | `configs/training/sft.yaml` | 必须与该阶段配置一致。 |
+| `--output-dir` | checkpoint所属运行目录 | 仅允许填写同一目录，不新建后缀。 |
 
-#### 训练完成后再加训
+#### 完成后开启加训阶段
 
 ```bash
 python train_sft.py --continue-from /path/to/previous/final --additional-epochs 1
 ```
 
-从已有适配器权重开始新的阶段，再训练一轮；新建优化器、学习率调度、计步状态、输出目录和 TensorBoard 记录。来源需包含当前流程保存的 `run.json`，沿用其验证划分，不叠加第二套 LoRA。加训阶段中断后，也用上一用途的断点恢复命令。
+`/path/to/...` 换成实际产物路径。只继承适配器权重，重新创建优化器、调度器、步数和日志目录；`--additional-epochs` 是新阶段追加轮数，可为正小数。来源仍需匹配模型、模板、数据、预算、精度和LoRA结构，不叠加第二套适配器。该阶段也可从自己的完整断点恢复。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | YAML 路径；默认 `configs/training/sft.yaml` | Base 和 LoRA 结构需匹配来源；新阶段学习率等设置取自这份配置，不自动降低学习率。 |
-| `--output-dir` | 目录路径；默认使用配置的输出目录并自动避重 | 选择新阶段的独立目录。 |
-
-`--additional-epochs` 为该用途必填的正数，可填小数；它表示新阶段的追加轮次，不是累计总轮次。`--continue-from` 与 `--resume-from-checkpoint` 互斥。
+| `--config` | `configs/training/sft.yaml` | 新阶段学习率等训练设置；来源协议保持。 |
+| `--output-dir` | 配置路径并自动避重 | 指定新阶段目录。 |
 
 ### evaluate_checkpoint.py
 
-#### 评测未经本项目 SFT 的原始 Base
+#### 评测未经本项目训练的原始Instruct
 
 ```bash
-python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Base
+python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 ```
 
-只加载原始 Base 权重，不使用 LoRA，也不需要训练目录或 `run.json`。使用与 SFT 相同的 GSM8K train 固定验证划分（10%，seed=42），省略题数时评测全量；相同数据和题数下，两种来源的题目索引与顺序一致。`--model-name` 与 `--checkpoint` 必须二选一，仅支持当前 Qwen3 Base 主线。
+不需要训练目录或适配器。只从缓存加载模型和分词器；数据准备与训练共用同一来源、筛选、分词长度规则及固定划分。省略题数时评测完整验证集。原始模型也接收同一system格式指令，方便提取答案。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--num-samples` | `1` 到验证集题数的整数；默认全量 | 限制为验证集固定顺序的前 N 题，与 SFT 使用相同题数便于比较。 |
-| `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
-| `--output` | JSON 文件路径；默认 `outputs/evaluations/base-<模型短名>-n<N>.json` | 指定报告及同名 JSONL、Markdown 的位置；相同命令续跑，换新路径可从头重评。 |
+| `--config` | `configs/training/sft.yaml` | 指定与待比较SFT相同的数据、精度和预算。 |
+| `--num-samples` | 完整验证集 | 选固定顺序前N题，须为合法正整数。 |
+| `--device` | 自动选择CUDA或CPU | 指定设备；BF16配置要求支持的CUDA。 |
+| `--output` | `outputs/evaluations/original-<model>-<dataset>-<config>-<split>-n<N>.json` | 三种报告的共同基础名，相同命令可续跑。 |
 
-#### 评测一个 checkpoint 或 final 的完整验证集
+#### 评测checkpoint或final
 
 ```bash
 python evaluate_checkpoint.py --checkpoint /path/to/run/final
 ```
 
-也可填写训练中保存的 `checkpoint-500` 等目录。读取该产物的 `run.json`，校验数据并沿用原来的验证划分；不更新权重、优化器或训练步数。未指定题数时评测完整验证集，默认划分约 748 题，不使用 test。
+读取保存的模型/数据/预算等配置，沿用该运行划分；评测不改变权重或训练状态，不创建优化器。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--num-samples` | `1` 到验证集题数的整数；默认全量 | 限制评测题数，超出范围会报错。 |
-| `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
-| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 指定汇总报告及同名基础名进度文件的位置；相同命令自动续跑，换新路径可从头重评。 |
+| `--num-samples` | 完整验证集 | 固定顺序前N题，超范围报错。 |
+| `--device` | 自动选择 | 设备需满足来源精度要求。 |
+| `--output` | `<run>/evaluations/<checkpoint>-<dataset>-<config>-<split>-n<N>.json` | 自定义报告位置。 |
+| `--config` | 本用途忽略，使用产物保存的配置 | 仅原始模型评测需要选择外部配置。 |
 
-#### 用相同题目子集比较训练断点
+两种模型来源互斥。生成使用贪心和保存的 `max_new_tokens`，初始检查配置为8192；前后比较固定预算，不提供标准解答，遇im_end停止。数据身份进入默认路径，避免复用旧Base或另一数据集的进度文件。
 
-```bash
-python evaluate_checkpoint.py --checkpoint /path/to/run/checkpoint-1000 --num-samples 32
-```
+每题完成后立即追加并flush `.progress.jsonl`，再同步 `.md` 阅读版；最终写 `.json` 汇总。记录question、完整 `reference_answer`、独立 `reference_final_answer`、生成answer、原始记录/轨迹索引、token数、判分、截断与耗时，标准答案不进入生成输入。
 
-替换 checkpoint 路径并保持相同题数，可比较不同训练阶段。使用验证集固定顺序的前 N 题，`32` 可替换为合法题数；分母和实际索引随报告保存。小样本结果用于观察趋势。
+中断后原样重跑同一命令，保持来源、数据、配置、题数和output一致。已有N条就从第N+1题继续；错误/格式无效/截断回答同样复用，全部完成不再生成。Markdown丢失会从JSONL重建。汇总包含全部记录，耗时累计实际生成时间；从头重评换新的output路径。不增加任务签名、任务头或日志修复。
 
-可选参数：
-
-| 参数 | 可填项／默认行为 | 用途 |
-| --- | --- | --- |
-| `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
-| `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 指定汇总报告及进度文件；重新评同一断点时使用新路径。 |
-
-以上用途均只从本地 checkpoint 和模型缓存加载，需保留对应 Base 权重与分词器；无需填写 `--local-files-only`。生成使用贪心解码、1024-token 上限和与训练共用的普通文本提示；输入止于 `Answer:` 后的换行，不含标准解答，输出原生 EOS 时结束。
-
-每生成完一题就向 `.progress.jsonl` 追加并刷新一条记录，例如 `checkpoint-1000-n32.progress.jsonl`；完成后另写 `checkpoint-1000-n32.json` 汇总。每条记录包含问题原文 `question`、清理后的完整标准解答 `reference_answer`、模型回答 `answer`，以及题目索引、token 数、判分、截断状态和该题耗时，方便对照。
-
-阅读时打开同目录的 `checkpoint-1000-n32.md`，不必直接查看 JSONL。Markdown 按题编号，分段展示问题、标准解答、模型回答及判分结果，正文保留真实换行，`####` 等文本按原样显示。每完成一题就同步写入并刷新，评测尚未结束也可查看；重跑时先从已有 JSONL 记录重建阅读版，再继续追加，因此更新前已保存的回答也会包含在内。`--output` 自定义路径时，阅读版使用相同基础文件名和 `.md` 后缀。
-
-中断后直接重新执行同一条命令，保持模型来源（原始 Base 名或 checkpoint）、题数和输出路径一致。脚本读取已有 N 条记录，从固定顺序的第 N+1 题继续；终端显示已完成数，进度条从该位置开始，不需要续跑开关。已保存的错误或截断回答同样复用，已有记录全部完成时不再生成。训练结束自动评测也使用同一保存方式。
-
-续跑后用全部记录汇总正确率、格式有效率、截断率、题数、耗时和吞吐；耗时为各题有效耗时之和，不包含停机时间。最终报告同时保存来源、文本格式和上述逐题记录，`source_type` 区分 `base` 与 `lora`，原始 Base 的 `checkpoint` 为 `null`。需要从头重评时，通过 `--output` 指定新的路径。
-
-恰有一个 `####` 且其后仅为最终数值才算格式有效；合法千位逗号和小数按精确数值比较，`5.0` 与 `5` 相等。格式不合格或截断计错，分母包括所有评测题；不提取或验算公式。详细口径见 [训练运行约定](docs/training-workflow.md)。
+评分取最后一个 `\boxed{...}`，处理嵌套花括号，再用固定版本Math-Verify比较参考终值，支持分数/小数等数学等价；A–E选项使用字符串解析，忽略大小写。当前不会根据题干把选项字母换算成数值答案，参考值为数字而输出字母时会判错。最后一个boxed缺失、未闭合、不可解析或生成截断均计错，不回退从推导末尾猜数字；不检查过程是否正确。报告同时给格式有效率和截断率。数学等价只用于生成评分，SFT仍按参考词元交叉熵训练。完整协议见[训练运行约定](docs/training-workflow.md)。
 
 ### sample_checkpoint.py
 
-#### 查看未接受本项目训练的 Base 回答
+#### 查看原始Instruct的问答
 
 ```bash
-python sample_checkpoint.py --model-name Qwen/Qwen3-4B-Base
+python sample_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507 --local-files-only
 ```
 
-原始 Base 与 SFT 使用相同的任务说明和 Question/Answer 前缀；报告中的标准解答同样去除计算器注释。
+从配置的数据集合按种子抽样，保存Markdown；少量样例不等于正确率评测。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--num-samples` | 正整数；默认 `5` | 抽题数量。 |
-| `--split` | `train` 或 `test`；默认 `test` | 选择抽样数据来源。 |
-| `--seed` | 整数；默认 `42` | 固定抽题，便于对照。 |
-| `--max-new-tokens` | 正整数；默认 `1024` | 贪心生成的最大输出长度。 |
-| `--local-files-only` | 无值开关；默认允许下载缺失模型文件 | 仅使用已有模型缓存。 |
-| `--device` | `cpu` 或 `cuda`；不填时自动选择 | 指定推理设备，精度均为 FP32。 |
-| `--output` | Markdown 文件路径；默认写入 `outputs/samples/` | 指定报告位置，同名报告会被覆盖。 |
+| `--config` | `configs/training/sft.yaml` | 原始模型的数据、精度和默认预算。 |
+| `--num-samples` | `5` | 抽题数，须不超过数据大小。 |
+| `--seed` | `42` | 固定抽题。 |
+| `--max-new-tokens` | 配置的生成预算 | 显式覆盖本次抽样预算。 |
+| `--local-files-only` | 默认允许获取缺少的模型文件 | 本例明确只用缓存。 |
+| `--device` | 自动选择 | 设备需满足配置精度要求。 |
+| `--output` | `outputs/samples/`下含来源/数据名/种子的文件 | 保存Markdown，同名覆盖。 |
 
-#### 查看训练产物的回答
+#### 查看训练产物问答
 
 ```bash
 python sample_checkpoint.py --checkpoint /path/to/run/final
 ```
 
-也可填写本流程保存的 `checkpoint-*`。仅从本地目录和缓存加载，需保留分词器、run.json 及对应 Base 权重；加载前校验当前文本格式。标准解答只写入报告，不输入模型。
+本用途始终只从本地和缓存加载，沿用产物保存的配置，校验来源；也可使用checkpoint目录。完整参考解答和终值仅写报告，不进入模型输入。
 
 可选参数：
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--num-samples` | 正整数；默认 `5` | 抽题数量。 |
-| `--split` | `train` 或 `test`；默认 `test` | 选择抽样数据来源。 |
-| `--seed` | 整数；默认 `42` | 与 Base 抽样使用相同题目。 |
-| `--max-new-tokens` | 正整数；默认 `1024` | 设置输出预算，达到上限时报告截断。 |
-| `--local-files-only` | 无值开关；本用途始终仅缓存加载 | 可省略，填写不会改变加载方式。 |
-| `--device` | `cpu` 或 `cuda`；不填时自动选择 | 指定 FP32 推理设备。 |
-| `--output` | Markdown 文件路径；默认写入 `outputs/samples/` | 指定报告位置，同名报告会被覆盖。 |
-
-这个用途已固定仅缓存加载，无需填写 `--local-files-only`。少量问答用于观察输出，不等于准确率评测。模型与数据均已缓存时，可在命令前设置 `HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1` 离线运行。
+| `--num-samples` | `5` | 抽题数。 |
+| `--seed` | `42` | 固定抽题以便对照。 |
+| `--max-new-tokens` | 来源保存的预算 | 覆盖本次抽样上限。 |
+| `--device` | 自动选择 | 设备需满足来源精度。 |
+| `--output` | `outputs/samples/` | 自定义Markdown路径。 |
+| `--local-files-only` | 本用途已固定开启 | 可省略。 |
+| `--config` | 本用途忽略 | 使用来源保存的配置。 |
 
 ### TensorBoard
 
@@ -232,37 +220,29 @@ python sample_checkpoint.py --checkpoint /path/to/run/final
 tensorboard --logdir /root/autodl-tmp/outputs/training
 ```
 
-填训练产物的根目录可比较多个实验；开发机可改填 `outputs/development`，也可填某次运行的 `runs/` 只查看该次记录。
+开发输出可改填 `outputs/development`，单次运行可填其 `runs/`。
 
-常用可选参数：
-
-| 参数 | 可填项／默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--port` | 可用端口号；默认 `6006` | 选择 TensorBoard 服务端口。 |
-| `--host` | 监听地址，如 `127.0.0.1`、`0.0.0.0`；默认由 TensorBoard 选择本地地址 | 指定服务监听地址。 |
+| `--port` | `6006` | 指定端口。 |
+| `--host` | TensorBoard默认值 | 指定监听地址。 |
 
-训练指标默认每 10 步记录，验证 loss 和保存默认每 500 步进行。train 固定划出 10% 作验证（seed=42），test 留作最终评测；验证 loss 始终全量计算。训练期间不监控生成正确率，生成结果写入独立评测报告。
+`train/loss`、`train/grad_norm`、`train/learning_rate`、`train/epoch`记录训练状态；`eval/loss`、`eval/runtime`、`eval/samples_per_second`来自完整验证集loss。生成正确率单独写评测报告，不能把验证loss解释成生成正确率。
 
-| 曲线 | 含义 |
-| --- | --- |
-| `train/loss`、`train/grad_norm`、`train/learning_rate`、`train/epoch` | 区间平均训练损失、记录步的裁剪前梯度范数、学习率、训练轮次。 |
-| `eval/loss` | 标准答案条件下的验证损失，不是数学答案正确率。 |
-| `eval/runtime`、`eval/samples_per_second` | 验证 loss 的耗时与吞吐记录，不包含结束后独立生成评测。 |
+### tools/test_instruct_sft.py
 
-### tools/test_base_sft.py
-
-#### 离线验证训练运行功能
+#### 离线检查数据、训练、恢复及评测
 
 ```bash
-HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_base_sft.py
+HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_instruct_sft.py
 ```
 
-使用临时随机微型模型和合成样本，核对普通文本提示、去注释、EOS 监督、续训、加训、日志、目录、独立评测及结束调用，以及逐题落盘、中断后按条数继续和汇总重建；不加载真实 Base 权重。
+使用随机微型Qwen/LoRA、固定版本官方模板、合成OpenR1记录和真实Math-Verify。验证筛选/分组/长度、掩码/EOS、参数更新、恢复/加训、TensorBoard、生成前后对比、逐题续跑及缓存恢复；不加载真实4B权重或测量其显存与准确率。
 
-可选参数：
+20条真实记录与官方完整分词器的检查结果见[样本检查记录](docs/research/openr1-data-smoke.md)，包含长度范围和数据标签与本地判分不一致的具体边界。
 
-| 参数 | 可填项／默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `-v` | 无值开关 | 显示逐项测试结果。 |
-| `-q` | 无值开关 | 使用简略输出。 |
-| `-k` | 测试名称子串或模式；默认运行全部 | 筛选测试。 |
+| `-v` | 关闭详细逐项输出 | 显示测试名称。 |
+| `-q` | 默认unittest输出 | 简略显示。 |
+| `-k` | 全部 | 按名称筛选。 |

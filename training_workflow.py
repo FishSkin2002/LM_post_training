@@ -11,7 +11,8 @@ from transformers.trainer_callback import PrinterCallback, ProgressCallback
 from transformers.trainer_utils import has_length
 from tqdm.auto import tqdm
 
-from prepare_sft_data import TEXT_FORMAT, require_base_model
+from prepare_sft_data import TEXT_FORMAT, load_tokenizer, require_model, text_format
+from math_scoring import SCORING
 
 
 RUN_FILE = "run.json"
@@ -30,16 +31,19 @@ def reserve_directory(path):
             suffix += 1
 
 
-def data_plan(dataset, source=None):
-    if len(dataset) < 2:
-        raise ValueError("At least two training examples are required for a held-out split.")
-    indices = list(range(len(dataset)))
+def data_plan(dataset, source=None, data_info=None):
+    groups = {}
+    for index, group in enumerate(dataset["group_id"]):
+        groups.setdefault(group, index)
+    indices = list(groups.values())
+    if len(indices) < 2:
+        raise ValueError("At least two eligible question groups are required for a held-out split.")
     random.Random(42).shuffle(indices)
     count = math.ceil(len(indices) * 0.1)
     plan = {
-        "fingerprint": dataset._fingerprint,
+        "fingerprint": dataset._fingerprint, "source": deepcopy(data_info),
         "validation_indices": indices[:count], "train_indices": indices[count:],
-        "split_seed": 42,
+        "split_seed": 42, "question_groups": len(groups), "duplicate_records": len(dataset)-len(groups),
     }
     if source is not None and plan != source["data"]:
         raise ValueError("Source data or validation split differs; keep the original dataset and split.")
@@ -55,7 +59,7 @@ def save_run(path, metadata):
 def read_source(path, config=None, *, resume=False):
     path = Path(path).expanduser().resolve()
     required = [RUN_FILE, "adapter_config.json", "adapter_model.safetensors",
-                "tokenizer.json", "tokenizer_config.json"]
+                "tokenizer.json", "tokenizer_config.json", "chat_template.jinja"]
     if resume:
         required += ["optimizer.pt", "scheduler.pt", "rng_state.pth", "trainer_state.json",
                      "training_args.bin"]
@@ -64,14 +68,23 @@ def read_source(path, config=None, *, resume=False):
         raise ValueError(f"Incomplete {'checkpoint' if resume else 'adapter source'}: missing {', '.join(missing)}")
     metadata = json.loads((path / RUN_FILE).read_text(encoding="utf-8"))
     config = config if config is not None else metadata["config"]
-    require_base_model(config["model_name"])
+    require_model(config["model_name"])
     saved = json.loads((path / "adapter_config.json").read_text(encoding="utf-8"))
     if saved["base_model_name_or_path"] != config["model_name"]:
-        raise ValueError("Source and configuration must use the same Qwen3 Base model.")
+        raise ValueError("Source and configuration must use the same Instruct model.")
     if metadata["config"]["model_name"] != config["model_name"]:
         raise ValueError("Source run model differs from the configuration.")
-    if metadata.get("text_format") != TEXT_FORMAT:
-        raise ValueError("Source text format differs; start a new run with the current prompt and answer cleanup.")
+    if metadata.get("scoring") != SCORING:
+        raise ValueError("Source math scoring dependencies or parser settings differ.")
+    saved_format = metadata.get("text_format", {})
+    if any(saved_format.get(key) != value for key, value in TEXT_FORMAT.items()):
+        raise ValueError("Source text format differs; start a new run with the current Instruct protocol.")
+    tokenizer = load_tokenizer(path, local_files_only=True)
+    if text_format(tokenizer) != saved_format:
+        raise ValueError("Source tokenizer template differs from its saved text format.")
+    for key in ("data", "max_length", "max_new_tokens", "bf16"):
+        if config.get(key) != metadata["config"].get(key):
+            raise ValueError(f"Source {key} differs from the configuration.")
     for key, value in config["lora"].items():
         if saved[key] != value:
             raise ValueError(f"Source LoRA {key} differs from the configuration.")
@@ -90,8 +103,8 @@ def read_source(path, config=None, *, resume=False):
 
 def new_run(config, plan, epochs, source_path=None):
     return {
-        "config": deepcopy(config), "data": plan, "epochs": epochs, "text_format": deepcopy(TEXT_FORMAT),
-        "source_adapter": str(source_path) if source_path else None,
+        "config": deepcopy(config), "data": plan, "epochs": epochs, "text_format": deepcopy(plan["source"]["text_format"]),
+        "scoring": deepcopy(SCORING), "source_adapter": str(source_path) if source_path else None,
     }
 
 
