@@ -1,5 +1,10 @@
 # 进展记录
 
+## 2026-10-29：调整新训练的验证与保存间隔
+
+- 用户明确会重新训练，只调整间隔，最终指定验证与checkpoint保存均为5000步。直接修改两份当前Instruct配置中的eval_steps/save_steps，并同步既有README及运行约定的默认值；未扩展续训功能。
+- 从最新main 5a05d81建立codex/lower-validation-frequency。YAML解析及与HEAD逐字段比较通过，仅两个间隔字段变化；logging_steps=10、save_total_limit=2等设置保持，文档默认值及git diff --check核对通过。仅配置和配套文档变更，未启动训练；较早未提交的研究记录保留。
+
 ## 2026-10-29：实现Instruct/OpenR1主线
 
 - 用户表示“完成”后，受控start获取最新main d89aa92并建立codex/openr1-instruct-sft；Git提交关系确认要求6ee878d已经合入。既有研究记录保留，未查询PR内容或评审。

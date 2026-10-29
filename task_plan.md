@@ -2,7 +2,7 @@
 
 ## 当前小步
 
-Instruct/OpenR1主线已实现，功能提交7df475c已正常推送并交付[PR #31](https://github.com/FishSkin2002/qwen/pull/31)。22项离线微型集成测试、四入口CLI/README、编译与差异检查通过；官方分词器与20条完整真实记录的检查见[样本检查](docs/research/openr1-data-smoke.md)。未加载真实4B权重或启动真实训练。本小步完成，等待用户审查与合入；后续小步先检查全量长度与目标GPU条件，再开展训练前基线。
+用户确定重新训练，验证与checkpoint保存默认间隔均改为5000个优化器更新步。两份当前Instruct配置、README及运行约定已同步；逐字段比较确认仅eval_steps/save_steps改变，其他训练配置及续训实现保持。配置与差异检查通过，本小步开发完成；交付分支为codex/lower-validation-frequency，后续审查合入由用户操作。
 
 ## Instruct/OpenR1功能实施
 

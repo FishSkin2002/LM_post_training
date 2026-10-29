@@ -1,5 +1,10 @@
 # 环境发现
 
+## 新训练验证与保存频次（2026-10-29）
+
+- 用户最终选择每5000个优化器更新步验证并保存，适用于当前training/development两份Instruct配置；两者采用steps策略。训练结束的最后一步验证/保存和保存后一次全量生成评测沿用既有实现。
+- 本轮按重新训练处理，不改变read_source的续训校验或Trainer状态恢复。旧Base配置继续作为历史资料；实际新训练读取启动时选择的YAML。
+
 ## Instruct/OpenR1实现与验证（2026-10-29）
 
 - 当前功能实现与新运行来源为Qwen/Qwen3-4B-Instruct-2507、OpenR1 default/train和原生三消息模板；具体行为以math_data/prepare_sft_data及配置为准，已交付PR #31。旧Base产物继续留作历史资料，不用于新协议恢复。

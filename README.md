@@ -87,7 +87,7 @@ python train_sft.py
 
 默认使用 `configs/training/sft.yaml`。先完成数据筛选、长度统计和按题目原文分组的固定划分，再加载模型；seed=42，10%题目组用于验证，同题不跨划分。配置显式保存长度和生成预算，原始模型与SFT比较时使用同一份配置和题目。
 
-训练只验证loss，默认每500步验证和保存、每10步记录，保留最近两个checkpoint。正常结束先保存final和状态，再复用已有模型做一次完整验证集生成评测；失败可独立重跑，不需加训。`run.json` 绑定模型、原生模板、system、数据指纹/索引、筛选规则、预算、精度和判分版本。
+训练只验证loss，默认每5000步验证和保存、每10步记录，保留最近两个checkpoint。正常结束先保存final和状态，再复用已有模型做一次完整验证集生成评测；失败可独立重跑，不需加训。`run.json` 绑定模型、原生模板、system、数据指纹/索引、筛选规则、预算、精度和判分版本。
 
 可选参数：
 
@@ -99,7 +99,7 @@ python train_sft.py
 #### 从完整断点恢复未完成的训练
 
 ```bash
-python train_sft.py --resume-from-checkpoint /path/to/run/checkpoint-500
+python train_sft.py --resume-from-checkpoint /path/to/run/checkpoint-5000
 ```
 
 恢复优化器、调度器、随机状态和进度，沿用原数据与训练计划、目录及TensorBoard步数。缺少必要状态或来源不符时在加载权重前拒绝。Ctrl+C不会额外保存中断状态，从最近完整断点继续。
