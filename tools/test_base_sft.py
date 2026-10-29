@@ -136,10 +136,14 @@ class BaseSFTTests(unittest.TestCase):
         line = next(line for line in terminal.getvalue().splitlines() if line.startswith("Output directory: "))
         return Path(line.removeprefix("Output directory: "))
 
-    def evaluate(self, checkpoint, num_samples=None, rows=None, output=None):
+    def evaluate(self, checkpoint=None, num_samples=None, rows=None, output=None, *, model_name=None):
         self.evaluation_count += 1
         output = output or self.root / f"evaluation-{self.evaluation_count}.json"
-        argv = ["evaluate_checkpoint.py", "--checkpoint", str(checkpoint), "--device", "cpu", "--output", str(output)]
+        argv = ["evaluate_checkpoint.py", "--device", "cpu", "--output", str(output)]
+        if checkpoint is not None:
+            argv += ["--checkpoint", str(checkpoint)]
+        if model_name is not None:
+            argv += ["--model-name", model_name]
         if num_samples is not None:
             argv += ["--num-samples", str(num_samples)]
         with patch.object(sys, "argv", argv), \
@@ -517,6 +521,100 @@ class BaseSFTTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["answer_format_rate"], 0.75)
         self.assertEqual(report["metrics"]["generation_truncation_rate"], 0.25)
         self.assertEqual(report["metrics"]["generation_samples"], 4)
+
+    def test_original_base_and_zero_adapter_evaluation_match_without_training_run(self):
+        before = {p.name: p.read_bytes() for p in self.base.iterdir() if p.is_file()}
+        self.assertFalse(list(self.root.rglob("run.json")))
+        with patch.object(evaluation, "read_source", side_effect=AssertionError("Base has no training run.")), \
+                patch.object(PeftModel, "from_pretrained", side_effect=AssertionError("Base must not load an adapter.")):
+            original = self.evaluate(model_name=self.model_name)
+        self.assertEqual(original["source_type"], "base")
+        self.assertIsNone(original["checkpoint"])
+        self.assertEqual(original["model_name"], self.model_name)
+        self.assertEqual(self.model_calls[-1]["dtype"], torch.float32)
+        self.assertTrue(self.model_calls[-1]["local_files_only"])
+        self.assertTrue(self.model_calls[-1]["adapter_kwargs"]["local_files_only"])
+        adapter = self.root / "zero-adapter"
+        base = self.load_model(self.model_name, dtype=torch.float32)
+        get_peft_model(base, LoraConfig(task_type="CAUSAL_LM", target_modules="all-linear",
+                                      **self.config["lora"])).save_pretrained(adapter)
+        self.tokenizer.save_pretrained(adapter)
+        workflow.save_run(adapter, workflow.new_run(
+            self.config, workflow.data_plan(Dataset.from_list(self.training_rows)), 1))
+        tuned = self.evaluate(adapter)
+        self.assertEqual(tuned["source_type"], "lora")
+        self.assertEqual(tuned["checkpoint"], str(adapter))
+        for key in ("model_name", "data", "text_format", "generation", "scoring"):
+            self.assertEqual(original[key], tuned[key])
+        for key in ("answer_accuracy", "answer_format_rate", "generation_truncation_rate", "generation_samples"):
+            self.assertEqual(original["metrics"][key], tuned["metrics"][key])
+        for first, second in zip(original["predictions"], tuned["predictions"], strict=True):
+            self.assertEqual({k: v for k, v in first.items() if k != "generation_runtime"},
+                             {k: v for k, v in second.items() if k != "generation_runtime"})
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.base.iterdir() if p.is_file()})
+
+    def test_original_base_evaluation_appends_and_resumes_all_report_formats(self):
+        output = self.root / "custom-base-evaluation.json"
+        progress_path = output.with_suffix(".progress.jsonl")
+        readable_path = output.with_suffix(".md")
+        indices = workflow.data_plan(Dataset.from_list(self.training_rows))["validation_indices"]
+        first, second = [self.training_rows[index] for index in indices]
+
+        def interrupt(model, tokenizer, question, budget):
+            if question == second["question"]:
+                records = [json.loads(line) for line in progress_path.read_text().splitlines()]
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["question"], first["question"])
+                self.assertIn("### Model answer", readable_path.read_text())
+                raise KeyboardInterrupt
+            return data.clean_answer(first["answer"]), 4, False
+
+        with patch.object(evaluation, "generate_answer", side_effect=interrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.evaluate(model_name=self.model_name, output=output)
+        self.assertFalse(output.exists())
+        prefix = progress_path.read_bytes()
+        with patch.object(evaluation, "generate_answer", return_value=(data.clean_answer(second["answer"]), 4, True)) as called:
+            report = self.evaluate(model_name=self.model_name, output=output)
+        called.assert_called_once()
+        self.assertEqual(called.call_args.args[2], second["question"])
+        self.assertTrue(progress_path.read_bytes().startswith(prefix))
+        records = [json.loads(line) for line in progress_path.read_text().splitlines()]
+        self.assertEqual(report["predictions"], records)
+        self.assertEqual(report["metrics"]["answer_accuracy"], 0.5)
+        self.assertEqual(report["metrics"]["answer_format_rate"], 1)
+        self.assertEqual(report["metrics"]["generation_truncation_rate"], 0.5)
+        self.assertEqual(readable_path.read_text().count("## Question "), 2)
+        self.assertIn(f"Source: `{self.model_name}`", readable_path.read_text())
+        with patch.object(evaluation, "generate_answer", side_effect=AssertionError("Completed Base answers must be reused.")):
+            repeated = self.evaluate(model_name=self.model_name, output=output)
+        self.assertEqual(repeated, report)
+        self.assertEqual(readable_path.read_text().count("## Question "), 2)
+
+    def test_original_base_evaluation_default_output_and_source_validation(self):
+        for sources in ({}, {"checkpoint": self.base, "model_name": self.model_name}):
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                evaluation.evaluate_checkpoint(**sources)
+        for sources in ({}, {"checkpoint": self.base, "model_name": self.model_name},
+                        {"model_name": "Qwen/Qwen3-4B"}, {"model_name": "Qwen3-4B-Base"}):
+            with self.assertRaises(SystemExit):
+                self.evaluate(**sources)
+        for count in (0, -1, 3):
+            with self.assertRaises(SystemExit):
+                self.evaluate(model_name=self.model_name, num_samples=count)
+        self.assertEqual(self.model_calls, [])
+        dataset = Dataset.from_list(self.training_rows)
+        model = self.model_loader(self.base, dtype=torch.float32, local_files_only=True)
+        with patch.object(evaluation, "__file__", str(self.root / "evaluate_checkpoint.py")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            report = evaluation.evaluate_checkpoint(model_name=self.model_name, num_samples=1, model=model,
+                                                    tokenizer=self.tokenizer, dataset=dataset, disable_tqdm=True)
+        output = self.root / "outputs/evaluations/base-Qwen3-0.6B-Base-n1.json"
+        self.assertEqual(json.loads(output.read_text()), report)
+        records = [json.loads(line) for line in output.with_suffix(".progress.jsonl").read_text().splitlines()]
+        self.assertEqual(records, report["predictions"])
+        self.assertIn("Source type: base", output.with_suffix(".md").read_text())
+        self.assertEqual(report["data"]["indices"], workflow.data_plan(dataset)["validation_indices"][:1])
 
     def test_manual_evaluation_selects_fixed_questions_without_changing_checkpoint(self):
         run = self.run_training("manual")

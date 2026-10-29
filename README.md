@@ -6,7 +6,7 @@
 .
 ├── prepare_sft_data.py          # 检查普通文本提示、答案去注释与损失标签
 ├── train_sft.py                 # 新训练、断点续训、完成后加训
-├── evaluate_checkpoint.py       # 手动或训练结束后的生成指标评测
+├── evaluate_checkpoint.py       # 原始 Base、训练断点及结束后的生成指标评测
 ├── sample_checkpoint.py         # 原始 Base 或 LoRA 产物抽样问答
 ├── training_workflow.py         # 数据划分、运行状态与终端展示
 ├── configs/
@@ -22,6 +22,7 @@
 │   │   ├── runs/               # 本次运行的 TensorBoard 事件
 │   │   ├── evaluations/        # 逐题 Markdown 阅读版、JSONL 进度与汇总 JSON
 │   │   └── trainer_state.json  # Trainer 训练进度与日志
+│   ├── evaluations/            # 原始 Base 的 JSONL、Markdown 与汇总 JSON
 │   └── samples/                # 抽样问答 Markdown 报告
 ├── docs/                       # 项目目标、训练与协作约定
 ├── tools/
@@ -120,6 +121,22 @@ python train_sft.py --continue-from /path/to/previous/final --additional-epochs 
 
 ### evaluate_checkpoint.py
 
+#### 评测未经本项目 SFT 的原始 Base
+
+```bash
+python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Base
+```
+
+只加载原始 Base 权重，不使用 LoRA，也不需要训练目录或 `run.json`。使用与 SFT 相同的 GSM8K train 固定验证划分（10%，seed=42），省略题数时评测全量；相同数据和题数下，两种来源的题目索引与顺序一致。`--model-name` 与 `--checkpoint` 必须二选一，仅支持当前 Qwen3 Base 主线。
+
+可选参数：
+
+| 参数 | 可填项／默认行为 | 用途 |
+| --- | --- | --- |
+| `--num-samples` | `1` 到验证集题数的整数；默认全量 | 限制为验证集固定顺序的前 N 题，与 SFT 使用相同题数便于比较。 |
+| `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
+| `--output` | JSON 文件路径；默认 `outputs/evaluations/base-<模型短名>-n<N>.json` | 指定报告及同名 JSONL、Markdown 的位置；相同命令续跑，换新路径可从头重评。 |
+
 #### 评测一个 checkpoint 或 final 的完整验证集
 
 ```bash
@@ -151,15 +168,15 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/checkpoint-1000 --num-sa
 | `--device` | `cpu` 或 `cuda`；默认自动选择 | 指定 FP32 推理设备。 |
 | `--output` | JSON 文件路径；默认 `<run>/evaluations/<checkpoint>-n<N>.json` | 指定汇总报告及进度文件；重新评同一断点时使用新路径。 |
 
-两种用途均只从本地 checkpoint 和模型缓存加载，需保留分词器与对应 Base 权重。生成使用贪心解码、1024-token 上限和与训练共用的普通文本提示；输入止于 `Answer:` 后的换行，不含标准解答，输出原生 EOS 时结束。
+以上用途均只从本地 checkpoint 和模型缓存加载，需保留对应 Base 权重与分词器；无需填写 `--local-files-only`。生成使用贪心解码、1024-token 上限和与训练共用的普通文本提示；输入止于 `Answer:` 后的换行，不含标准解答，输出原生 EOS 时结束。
 
 每生成完一题就向 `.progress.jsonl` 追加并刷新一条记录，例如 `checkpoint-1000-n32.progress.jsonl`；完成后另写 `checkpoint-1000-n32.json` 汇总。每条记录包含问题原文 `question`、清理后的完整标准解答 `reference_answer`、模型回答 `answer`，以及题目索引、token 数、判分、截断状态和该题耗时，方便对照。
 
 阅读时打开同目录的 `checkpoint-1000-n32.md`，不必直接查看 JSONL。Markdown 按题编号，分段展示问题、标准解答、模型回答及判分结果，正文保留真实换行，`####` 等文本按原样显示。每完成一题就同步写入并刷新，评测尚未结束也可查看；重跑时先从已有 JSONL 记录重建阅读版，再继续追加，因此更新前已保存的回答也会包含在内。`--output` 自定义路径时，阅读版使用相同基础文件名和 `.md` 后缀。
 
-中断后直接重新执行同一条命令，保持 checkpoint、题数和输出路径一致。脚本读取已有 N 条记录，从固定顺序的第 N+1 题继续；终端显示已完成数，进度条从该位置开始，不需要续跑开关。已保存的错误或截断回答同样复用，已有记录全部完成时不再生成。训练结束自动评测也使用同一保存方式。
+中断后直接重新执行同一条命令，保持模型来源（原始 Base 名或 checkpoint）、题数和输出路径一致。脚本读取已有 N 条记录，从固定顺序的第 N+1 题继续；终端显示已完成数，进度条从该位置开始，不需要续跑开关。已保存的错误或截断回答同样复用，已有记录全部完成时不再生成。训练结束自动评测也使用同一保存方式。
 
-续跑后用全部记录汇总正确率、格式有效率、截断率、题数、耗时和吞吐；耗时为各题有效耗时之和，不包含停机时间。最终报告同时保存来源、文本格式和上述逐题记录。需要从头重评时，通过 `--output` 指定新的路径。
+续跑后用全部记录汇总正确率、格式有效率、截断率、题数、耗时和吞吐；耗时为各题有效耗时之和，不包含停机时间。最终报告同时保存来源、文本格式和上述逐题记录，`source_type` 区分 `base` 与 `lora`，原始 Base 的 `checkpoint` 为 `null`。需要从头重评时，通过 `--output` 指定新的路径。
 
 恰有一个 `####` 且其后仅为最终数值才算格式有效；合法千位逗号和小数按精确数值比较，`5.0` 与 `5` 相等。格式不合格或截断计错，分母包括所有评测题；不提取或验算公式。详细口径见 [训练运行约定](docs/training-workflow.md)。
 

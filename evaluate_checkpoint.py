@@ -1,4 +1,4 @@
-"""Measure generated-answer metrics on a checkpoint's saved GSM8K validation split."""
+"""Evaluate original Qwen3 Base or a LoRA checkpoint on the fixed GSM8K validation split."""
 
 import argparse
 from decimal import Decimal
@@ -14,7 +14,7 @@ import torch
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM
 
-from prepare_sft_data import clean_answer, load_tokenizer
+from prepare_sft_data import TEXT_FORMAT, clean_answer, load_tokenizer, require_base_model
 from sample_checkpoint import generate_answer
 from training_workflow import data_plan, format_metrics, read_source
 
@@ -53,9 +53,17 @@ def readable_prediction(position, prediction):
     )
 
 
-def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=None,
+def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, output=None, device=None,
                         model=None, tokenizer=None, dataset=None, disable_tqdm=False):
-    checkpoint, metadata, _ = read_source(checkpoint)
+    if (checkpoint is None) == (model_name is None):
+        raise ValueError("Specify exactly one of checkpoint or model-name.")
+    metadata = None
+    if checkpoint is not None:
+        checkpoint, metadata, _ = read_source(checkpoint)
+        model_name = metadata["config"]["model_name"]
+    else:
+        require_base_model(model_name)
+    source_type = "lora" if checkpoint is not None else "base"
     if dataset is None:
         dataset = load_dataset("openai/gsm8k", "main", split="train")
     plan = data_plan(dataset, metadata)
@@ -65,9 +73,13 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
             raise ValueError(f"num-samples must be between 1 and {len(indices)}; omit it for the full validation set.")
         indices = indices[:num_samples]
     rows = dataset.select(indices)
-    output = Path(output).expanduser().resolve() if output else (
-        checkpoint.parent / "evaluations" / f"{checkpoint.name}-n{len(rows)}.json"
-    )
+    if checkpoint is not None:
+        directory = checkpoint.parent / "evaluations"
+        label = checkpoint.name
+    else:
+        directory = Path(__file__).resolve().parent / "outputs" / "evaluations"
+        label = f"base-{model_name.rsplit('/', 1)[-1]}"
+    output = Path(output).expanduser().resolve() if output else directory / f"{label}-n{len(rows)}.json"
     progress_path = output.with_suffix(".progress.jsonl")
     readable_path = output.with_suffix(".md")
     predictions = []
@@ -78,13 +90,14 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
     print(f"Readable answers: {readable_path}", flush=True)
     if model is None:
         model = AutoModelForCausalLM.from_pretrained(
-            metadata["config"]["model_name"], dtype=torch.float32, local_files_only=True,
+            model_name, dtype=torch.float32, local_files_only=True,
             adapter_kwargs={"local_files_only": True},
         )
-        model = PeftModel.from_pretrained(model, checkpoint, local_files_only=True)
+        if checkpoint is not None:
+            model = PeftModel.from_pretrained(model, checkpoint, local_files_only=True)
         model.to(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     if tokenizer is None:
-        tokenizer = load_tokenizer(checkpoint, local_files_only=True)
+        tokenizer = load_tokenizer(checkpoint or model_name, local_files_only=True)
     was_training = model.training
     model.eval()
     try:
@@ -93,7 +106,8 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
                 readable_path.open("w", encoding="utf-8") as readable, tqdm(
                 total=len(rows), initial=len(predictions), desc="Generate validation answers",
                 unit="question", disable=disable_tqdm) as progress:
-            readable.write(f"# GSM8K generation evaluation\n\nCheckpoint: `{checkpoint}`\n\n")
+            readable.write(f"# GSM8K generation evaluation\n\nSource type: {source_type}\n\n"
+                           f"Model: `{model_name}`\n\nSource: `{checkpoint or model_name}`\n\n")
             for position, prediction in enumerate(predictions):
                 readable.write(readable_prediction(position, prediction))
             readable.flush()
@@ -125,10 +139,11 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
     metrics = answer_metrics(results)
     metrics.update(generation_runtime=elapsed, generation_samples_per_second=len(results) / max(elapsed, 1e-9))
     report = {
-        "checkpoint": str(checkpoint), "model_name": metadata["config"]["model_name"],
+        "source_type": source_type, "model_name": model_name,
+        "checkpoint": str(checkpoint) if checkpoint is not None else None,
         "data": {"dataset": "openai/gsm8k", "split": "validation", "indices": indices,
                  "fingerprint": plan["fingerprint"], "split_seed": plan["split_seed"]},
-        "text_format": metadata["text_format"],
+        "text_format": TEXT_FORMAT,
         "generation": {"do_sample": False, "max_new_tokens": MAX_NEW_TOKENS,
                        "eos_token_id": tokenizer.eos_token_id},
         "scoring": "One #### followed only by a decimal number; exact numeric equality; truncated answers are incorrect.",
@@ -142,13 +157,16 @@ def evaluate_checkpoint(checkpoint, *, num_samples=None, output=None, device=Non
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True, help="Base LoRA checkpoint or final directory.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--checkpoint", type=Path, help="Base LoRA checkpoint or final directory.")
+    source.add_argument("--model-name", help="Original Base repository, e.g. Qwen/Qwen3-4B-Base.")
     parser.add_argument("--num-samples", type=int, help="Evaluate the first N validation questions; default: all.")
-    parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations/<checkpoint>-n<N>.json.")
+    parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations for LoRA, outputs/evaluations for Base.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
     args = parser.parse_args()
     try:
-        evaluate_checkpoint(args.checkpoint, num_samples=args.num_samples, output=args.output, device=args.device)
+        evaluate_checkpoint(args.checkpoint, model_name=args.model_name, num_samples=args.num_samples,
+                            output=args.output, device=args.device)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 
