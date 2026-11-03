@@ -1,5 +1,7 @@
 # 大语言模型数学推理后训练
 
+以学习为目的的大语言模型数学推理后训练项目，主要学习LoRA SFT、DPO、GRPO等。[实验报告](reports/)
+
 ## 项目目录
 
 ```text
@@ -31,6 +33,7 @@
 │   ├── test_instruct_sft.py     # 随机微型模型离线集成检查
 │   ├── fixtures/               # 测试用固定版本官方模板
 │   └── git_workflow.py          # 受控Git入口及相应测试
+├── reports/                    # 实验报告
 ├── requirements.txt
 ├── AGENTS.md
 ├── CONTEXT.md
