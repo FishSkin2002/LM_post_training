@@ -67,37 +67,48 @@ def read_source(path, config=None, *, resume=False):
     if missing:
         raise ValueError(f"Incomplete {'checkpoint' if resume else 'adapter source'}: missing {', '.join(missing)}")
     metadata = json.loads((path / RUN_FILE).read_text(encoding="utf-8"))
-    config = config if config is not None else metadata["config"]
+    stage = metadata.get("stage", "sft")
+    if stage not in ("sft", "dpo", "grpo"):
+        raise ValueError(f"Unknown training stage: {stage}.")
+    if stage != "sft" and config is not None:
+        raise ValueError("SFT requires an SFT adapter or checkpoint.")
+    evaluation = metadata if stage == "sft" else metadata["evaluation"]
+    source_config = evaluation["config"]
+    config = config if config is not None else source_config
     require_model(config["model_name"])
     saved = json.loads((path / "adapter_config.json").read_text(encoding="utf-8"))
     if saved["base_model_name_or_path"] != config["model_name"]:
         raise ValueError("Source and configuration must use the same Instruct model.")
-    if metadata["config"]["model_name"] != config["model_name"]:
+    if source_config["model_name"] != config["model_name"]:
         raise ValueError("Source run model differs from the configuration.")
     if metadata.get("scoring") != SCORING:
         raise ValueError("Source math scoring dependencies or parser settings differ.")
-    saved_format = metadata.get("text_format", {})
+    saved_format = evaluation.get("text_format", {})
     if any(saved_format.get(key) != value for key, value in TEXT_FORMAT.items()):
         raise ValueError("Source text format differs; start a new run with the current Instruct protocol.")
     tokenizer = load_tokenizer(path, local_files_only=True)
     if text_format(tokenizer) != saved_format:
         raise ValueError("Source tokenizer template differs from its saved text format.")
     for key in ("data", "max_length", "max_new_tokens", "bf16"):
-        if config.get(key) != metadata["config"].get(key):
+        if config.get(key) != source_config.get(key):
             raise ValueError(f"Source {key} differs from the configuration.")
     for key, value in config["lora"].items():
         if saved[key] != value:
             raise ValueError(f"Source LoRA {key} differs from the configuration.")
     step = None
     if resume:
-        selected = {key: value for key, value in config.items() if key != "output_dir"}
-        original = {key: value for key, value in metadata["config"].items() if key != "output_dir"}
-        if selected != original:
-            raise ValueError("Resume must keep the original training configuration; use a new stage for changes.")
+        if stage == "sft":
+            selected = {key: value for key, value in config.items() if key != "output_dir"}
+            original = {key: value for key, value in source_config.items() if key != "output_dir"}
+            if selected != original:
+                raise ValueError("Resume must keep the original training configuration; use a new stage for changes.")
         state = json.loads((path / "trainer_state.json").read_text(encoding="utf-8"))
         step = state["global_step"]
         if step >= state["max_steps"]:
-            raise ValueError("This training plan is complete; use --continue-from for additional training.")
+            message = "This training plan is complete."
+            if stage == "sft":
+                message += " Use --continue-from for additional training."
+            raise ValueError(message)
     return path, metadata, step
 
 

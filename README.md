@@ -10,6 +10,8 @@
 ├── math_scoring.py              # boxed提取及Math-Verify数学等价判分
 ├── prepare_sft_data.py          # 原生聊天包装、长度统计和assistant-only标签
 ├── train_sft.py                 # 新训练、断点续训、完成后加训
+├── train_post_sft.py            # 从同一 SFT final 分别训练 DPO 和 GRPO
+├── post_training_data.py        # PRM800K 偏好对、Skywork 数学题和答案奖励
 ├── evaluate_checkpoint.py       # 原始Instruct或LoRA的同题生成评测
 ├── sample_checkpoint.py         # 原始Instruct或LoRA抽样问答
 ├── training_workflow.py         # 题目组划分、运行状态与终端展示
@@ -17,6 +19,8 @@
 │   ├── development/sft.yaml     # Instruct数据检查及本地输出路径
 │   └── training/
 │       ├── sft.yaml             # 主线Qwen3-4B-Instruct-2507/OpenR1配置
+│       ├── dpo.yaml             # PRM800K 完整解答偏好对
+│       ├── grpo.yaml            # Skywork 数学题与 GRPO 采样设置
 │       └── sft-8b.yaml          # 历史Base配置，新版入口拒绝使用
 ├── outputs/
 │   ├── development/<run>/
@@ -31,6 +35,7 @@
 ├── docs/                       # 目标、训练和协作约定
 ├── tools/
 │   ├── test_instruct_sft.py     # 随机微型模型离线集成检查
+│   ├── test_post_sft.py         # DPO、GRPO 与共用评测离线检查
 │   ├── fixtures/               # 测试用固定版本官方模板
 │   └── git_workflow.py          # 受控Git入口及相应测试
 ├── reports/                    # 实验报告
@@ -46,7 +51,7 @@
 
 ## 主要脚本使用说明
 
-在项目根目录先运行 `python -m pip install -r requirements.txt`。真实主线固定使用 `Qwen/Qwen3-4B-Instruct-2507`；配置默认BF16底座/计算、FP32 LoRA及非重入激活检查点，训练时关闭KV cache。真实训练需要支持BF16的CUDA设备；CPU/FP32只用于显式配置的随机微型接口检查。
+在项目根目录使用 Python 3.11 或更新版本运行 `python -m pip install -r requirements.txt`。真实主线固定使用 `Qwen/Qwen3-4B-Instruct-2507`；配置默认BF16底座/计算、FP32 LoRA及非重入激活检查点，训练时关闭KV cache。真实训练需要支持BF16的CUDA设备；CPU/FP32只用于显式配置的随机微型接口检查。
 
 ### prepare_sft_data.py
 
@@ -129,6 +134,39 @@ python train_sft.py --continue-from /path/to/previous/final --additional-epochs 
 | `--config` | `configs/training/sft.yaml` | 新阶段学习率等训练设置；来源协议保持。 |
 | `--output-dir` | 配置路径并自动避重 | 指定新阶段目录。 |
 
+### train_post_sft.py
+
+#### 从已完成的 SFT 开始 DPO 或 GRPO
+
+```bash
+python train_post_sft.py dpo --sft-source /path/to/sft-run/final
+python train_post_sft.py grpo --sft-source /path/to/sft-run/final
+```
+
+将 `/path/to/sft-run/final` 换成 `configs/training/sft.yaml` 对应运行的 `final/`，两条命令使用同一路径。两个阶段各自更新一份从 SFT 加载的 LoRA，各有优化器和输出目录。DPO 保留 PRM800K `chosen` 和 `rejected` 的原始答案格式。GRPO 在 Skywork 数学题上采样，按最后一个 boxed 答案的数学等价性和原生 EOS 计 0/1 奖励。
+
+两个阶段都排除与原 SFT 验证题仅有空白差异的训练题。正常结束后先保存 `final/`，再对原 SFT 验证集生成评测。默认配置面向单 GPU。训练机短测可复制对应 YAML，在 `trainer` 下设置 `max_steps` 并指定单独的 `--output-dir`。默认长度和采样组大小是短测的起始值。短测正常结束后同样进入全量评测，可在看到适配器保存完成后单独用 `evaluate_checkpoint.py --num-samples` 做抽样评测。
+
+| 参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | `configs/training/dpo.yaml` 或 `grpo.yaml` | 指定数据版本、长度、训练步数和算法设置。 |
+| `--output-dir` | 阶段 YAML 的 `output_dir` | 指定新运行目录，重名自动避让。 |
+
+#### 恢复未完成的 DPO 或 GRPO
+
+```bash
+python train_post_sft.py dpo --resume-from-checkpoint /path/to/dpo-run/checkpoint-100
+```
+
+恢复 GRPO 时改用 `grpo` 和相应阶段的断点。续训从断点恢复策略、优化器、调度器和进度，按记录的 SFT 产物重建固定参考。原始 SFT `final/` 需保留在保存时的路径。
+
+| 参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | 对应阶段的训练 YAML | 指定与断点一致的阶段配置。 |
+| `--output-dir` | checkpoint 所属运行目录 | 显式填写时须指向同一目录。 |
+
+完整要求见[后续训练约定](docs/post-training-workflow.md)。
+
 ### evaluate_checkpoint.py
 
 #### 评测未经本项目训练的原始Instruct
@@ -144,9 +182,10 @@ python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
 | `--config` | `configs/training/sft.yaml` | 指定与待比较SFT相同的数据、精度和预算。 |
+| `--sft-source` | 按配置生成固定划分 | 指向待比较的 SFT `final/`，用产物保存的准确划分、模板和预算。与 `--config` 互斥。 |
 | `--num-samples` | 完整验证集 | 选固定顺序前N题，须为合法正整数。 |
 | `--device` | 自动选择CUDA或CPU | 指定设备；BF16配置要求支持的CUDA。 |
-| `--output` | `outputs/evaluations/original-<model>-<dataset>-<config>-<split>-n<N>.json` | 三种报告的共同基础名，相同命令可续跑。 |
+| `--output` | `outputs/evaluations/` 下按模型和数据命名 | 三种报告的共同基础名。指定 `--sft-source` 时文件名包含该评测划分和解码设置的标识。 |
 
 #### 评测checkpoint或final
 
@@ -154,7 +193,7 @@ python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 python evaluate_checkpoint.py --checkpoint /path/to/run/final
 ```
 
-读取保存的模型/数据/预算等配置，沿用该运行划分；评测不改变权重或训练状态，不创建优化器。
+SFT、DPO 和 GRPO 均可通过该命令评测。报告区分训练阶段，共用源 SFT 运行的评测题、模板、精度和生成预算。
 
 可选参数：
 
@@ -163,7 +202,7 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/final
 | `--num-samples` | 完整验证集 | 固定顺序前N题，超范围报错。 |
 | `--device` | 自动选择 | 设备需满足来源精度要求。 |
 | `--output` | `<run>/evaluations/<checkpoint>-<dataset>-<config>-<split>-n<N>.json` | 自定义报告位置。 |
-| `--config` | 本用途忽略，使用产物保存的配置 | 仅原始模型评测需要选择外部配置。 |
+| `--config` | 使用产物保存的评测配置 | 仅原始模型评测使用外部配置。 |
 
 两种模型来源互斥。生成使用贪心和保存的 `max_new_tokens`，初始检查配置为8192；前后比较固定预算，不提供标准解答，遇im_end停止。数据身份进入默认路径，避免复用旧Base或另一数据集的进度文件。
 
@@ -249,3 +288,13 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_instruct_sft.py
 | `-v` | 关闭详细逐项输出 | 显示测试名称。 |
 | `-q` | 默认unittest输出 | 简略显示。 |
 | `-k` | 全部 | 按名称筛选。 |
+
+### tools/test_post_sft.py
+
+#### 离线检查 DPO、GRPO 和共用评测
+
+```bash
+HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_post_sft.py
+```
+
+使用随机微型模型核对偏好对、奖励、参考冻结、参数更新、保存恢复和评测一致性。可用 `-v` 查看逐项结果。

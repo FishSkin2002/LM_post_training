@@ -55,6 +55,7 @@ def main():
     try:
         if args.checkpoint:
             args.checkpoint, metadata, _ = read_source(args.checkpoint)
+            metadata = metadata.get("evaluation", metadata)
             config = metadata["config"]
             model_name = config["model_name"]
             label = f"lora-{args.checkpoint.parent.name}-{args.checkpoint.name}"

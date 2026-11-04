@@ -6,6 +6,7 @@ from pathlib import Path
 from textwrap import indent
 import time
 
+from datasets.fingerprint import Hasher
 from peft import PeftModel
 import torch
 from tqdm.auto import tqdm
@@ -44,15 +45,27 @@ def readable_prediction(position, prediction):
 
 
 def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, output=None, device=None,
-                        model=None, tokenizer=None, dataset=None, data_info=None, config=None, disable_tqdm=False):
+                        model=None, tokenizer=None, dataset=None, data_info=None, config=None, disable_tqdm=False,
+                        sft_source=None):
     if (checkpoint is None) == (model_name is None):
         raise ValueError("Specify exactly one of checkpoint or model-name.")
+    if sft_source is not None and (checkpoint is not None or config is not None):
+        raise ValueError("Use sft-source only with model-name and without a separate config.")
     metadata = None
+    stage = "original"
     if checkpoint is not None:
         checkpoint, metadata, _ = read_source(checkpoint)
+        stage = metadata.get("stage", "sft")
+        sft_source = metadata.get("source_adapter") if stage in ("dpo", "grpo") else None
+        metadata = metadata.get("evaluation", metadata)
         config = metadata["config"]
         model_name = config["model_name"]
     else:
+        if sft_source is not None:
+            sft_source, metadata, _ = read_source(sft_source)
+            if metadata.get("stage", "sft") != "sft":
+                raise ValueError("sft-source must be an SFT artifact.")
+            config = metadata["config"]
         config = config or load_config(CONFIG_DIR / "training/sft.yaml")
         require_model(model_name)
         if model_name != config["model_name"]:
@@ -60,7 +73,7 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     validate_precision(config, device)
     if tokenizer is None:
-        tokenizer = load_tokenizer(checkpoint or model_name, local_files_only=True)
+        tokenizer = load_tokenizer(checkpoint or sft_source or model_name, local_files_only=True)
     if metadata and text_format(tokenizer) != metadata["text_format"]:
         raise ValueError("Source tokenizer template differs.")
     source_type = "lora" if checkpoint is not None else "original"
@@ -81,6 +94,9 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     else:
         directory = Path(__file__).resolve().parent / "outputs" / "evaluations"
         label = f"original-{model_name.rsplit('/', 1)[-1]}"
+        if sft_source is not None:
+            identity = Hasher.hash((plan["fingerprint"], indices, config["max_new_tokens"], config.get("bf16", False)))
+            label += f"-{identity}"
     data_label = dataset_label(config["data"])
     output = Path(output).expanduser().resolve() if output else directory / f"{label}-{data_label}-n{len(rows)}.json"
     progress_path = output.with_suffix(".progress.jsonl")
@@ -107,7 +123,7 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                 readable_path.open("w", encoding="utf-8") as readable, tqdm(
                 total=len(rows), initial=len(predictions), desc="Generate validation answers",
                 unit="question", disable=disable_tqdm) as progress:
-            readable.write(f"# Math generation evaluation ({data_label})\n\nSource type: {source_type}\n\n"
+            readable.write(f"# Math generation evaluation ({data_label})\n\nSource type: {source_type}\n\nStage: {stage}\n\n"
                            f"Model: `{model_name}`\n\nSource: `{checkpoint or model_name}`\n\n")
             for position, prediction in enumerate(predictions):
                 readable.write(readable_prediction(position, prediction))
@@ -138,8 +154,9 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     metrics = answer_metrics(results)
     metrics.update(generation_runtime=elapsed, generation_samples_per_second=len(results) / max(elapsed, 1e-9))
     report = {
-        "source_type": source_type, "model_name": model_name,
+        "source_type": source_type, "stage": stage, "model_name": model_name,
         "checkpoint": str(checkpoint) if checkpoint is not None else None,
+        "sft_source": str(sft_source) if sft_source is not None else None,
         "data": {"source": plan["source"], "split": "validation", "indices": indices,
                  "fingerprint": plan["fingerprint"], "split_seed": plan["split_seed"]},
         "text_format": text_format(tokenizer), "precision": "bf16" if config.get("bf16") else "fp32",
@@ -159,8 +176,11 @@ def main():
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--checkpoint", type=Path, help="Current Instruct LoRA checkpoint or final directory.")
     source.add_argument("--model-name", help="Original Instruct repository: Qwen/Qwen3-4B-Instruct-2507.")
-    parser.add_argument("--config", type=Path, default=CONFIG_DIR / "training/sft.yaml",
-                        help="Data/precision/budget for the original model; checkpoints use saved settings.")
+    evaluation_source = parser.add_mutually_exclusive_group()
+    evaluation_source.add_argument("--config", type=Path,
+                                   help="Original-model settings; default: configs/training/sft.yaml.")
+    evaluation_source.add_argument("--sft-source", type=Path,
+                                   help="Anchor original-model evaluation to the exact held-out split of an SFT artifact.")
     parser.add_argument("--num-samples", type=int, help="Evaluate the first N validation questions; default: all.")
     parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
@@ -168,7 +188,8 @@ def main():
     try:
         evaluate_checkpoint(args.checkpoint, model_name=args.model_name, num_samples=args.num_samples,
                             output=args.output, device=args.device,
-                            config=load_config(args.config) if args.checkpoint is None else None)
+                            config=load_config(args.config) if args.checkpoint is None and args.config else None,
+                            sft_source=args.sft_source)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 

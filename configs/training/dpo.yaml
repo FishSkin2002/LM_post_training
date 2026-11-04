@@ -1,0 +1,16 @@
+output_dir: /root/autodl-tmp/outputs/training/qwen3-4b-instruct-prm800k-dpo
+data:
+  name: tasksource/prm800k_dpo
+  config: solution
+  split: train
+  revision: 33c3d8ed2f3a3375cc9ebbfd05ff6d11b7ee6ba6
+max_length: 4096
+trainer:
+  num_train_epochs: 1
+  learning_rate: 0.00001
+  per_device_train_batch_size: 1
+  beta: 0.1
+  logging_steps: 10
+  save_strategy: steps
+  save_steps: 100
+  save_total_limit: 2
