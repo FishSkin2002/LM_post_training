@@ -2,18 +2,58 @@
 
 from collections import Counter
 import json
+import re
 
 from datasets import Features, List, Value, load_dataset
 from datasets.fingerprint import Hasher
 
-from math_scoring import SCORING, parse_answer, score_answer
+from math_scoring import SCORING, boxed_answer, parse_answer, score_answer
 from prepare_sft_data import SYSTEM_PROMPT, messages
 
-DPO_SYSTEM = "Solve the following math problem step by step.\nEnd your response with the final answer."
+DPO_ANSWER_FORMAT = "boxed-v1"
+ANSWER_HEADING = re.compile(r"^# Answer[ \t]*\r?$", re.MULTILINE)
+FINAL_BOX = re.compile(r"\\boxed[ \t]*\{(.*)\}")
+MATH_WRAPPERS = (("$$", "$$"), ("$", "$"), (r"\(", r"\)"), (r"\[", r"\]"))
+MATH_DELIMITER = re.compile(r"(?<!\\)(?:\\\\)*(?:\$|\\[()\[\]])")
 SOURCES = {
     "dpo": ("tasksource/prm800k_dpo", "solution", "train"),
     "grpo": ("Skywork/Skywork-OR1-RL-Data", "default", "math"),
 }
+
+
+def _format_dpo_answer(text):
+    """Return the reformatted reply and original final answer, if safely identifiable."""
+    headings = list(ANSWER_HEADING.finditer(text))
+    if headings:
+        heading = headings[-1]
+        final = text[heading.end():].strip()
+    else:
+        start = text.rfind(r"\boxed")
+        if start < 0:
+            return None
+        final = text[start:].rstrip()
+
+    if len(final.splitlines()) != 1:
+        return None
+    if headings:
+        for opening, closing in MATH_WRAPPERS:
+            if final.startswith(opening) and final.endswith(closing):
+                inner = final[len(opening):-len(closing)].strip()
+                if not MATH_DELIMITER.search(inner):
+                    final = inner
+                    break
+    existing = FINAL_BOX.fullmatch(final)
+    if existing:
+        content = existing[1].strip()
+        box = final
+    elif headings:
+        content = final
+        box = rf"\boxed{{{content}}}"
+    else:
+        return None
+    if MATH_DELIMITER.search(content) or boxed_answer(box) != content:
+        return None
+    return (text[:heading.start()] + box if headings else text), content
 
 
 def prepare_post_training_data(stage, source, tokenizer, held_out, length_limit):
@@ -23,15 +63,15 @@ def prepare_post_training_data(stage, source, tokenizer, held_out, length_limit)
     if not required.issubset(raw.column_names):
         raise ValueError(f"Missing {stage.upper()} data columns: {', '.join(sorted(required - set(raw.column_names)))}")
     held_out = {" ".join(question.split()) for question in held_out}
-    system = DPO_SYSTEM if stage == "dpo" else SYSTEM_PROMPT
     backend = json.loads(tokenizer.backend_tokenizer.to_str())
     backend.pop("padding", None)
     backend.pop("truncation", None)
     identity = {"protocol": 1, "stage": stage, "source": source, "raw_fingerprint": raw._fingerprint,
                 "held_out": sorted(held_out), "length_limit": length_limit,
-                "system": system, "template": tokenizer.chat_template, "tokenizer": backend,
-                "scoring": SCORING if stage == "grpo" else None}
+                "system": SYSTEM_PROMPT, "template": tokenizer.chat_template, "tokenizer": backend,
+                "scoring": SCORING}
     if stage == "dpo":
+        identity["answer_format"] = DPO_ANSWER_FORMAT
         fields = {key: List(Value("int32")) for key in ("prompt_ids", "chosen_ids", "rejected_ids")}
     else:
         fields = {"prompt": List({"role": Value("string"), "content": Value("string")}),
@@ -51,7 +91,7 @@ def prepare_post_training_data(stage, source, tokenizer, held_out, length_limit)
             return {**example, "filter_reason": "invalid_prompt"}
         if " ".join(question.split()) in held_out:
             return {**example, "filter_reason": "held_out_overlap"}
-        prompt = messages(question, system=system)
+        prompt = messages(question)
         prompt_ids = tokenizer.apply_chat_template(
             prompt, tokenize=True, add_generation_prompt=True, return_dict=False,
         )
@@ -59,8 +99,14 @@ def prepare_post_training_data(stage, source, tokenizer, held_out, length_limit)
             answers = [row["chosen"], row["rejected"]]
             if any(not isinstance(answer, str) or not answer.strip() for answer in answers) or answers[0] == answers[1]:
                 return {**example, "filter_reason": "invalid_pair"}
+            chosen_answer, rejected_answer = map(_format_dpo_answer, answers)
+            if chosen_answer is None or rejected_answer is None:
+                return {**example, "filter_reason": "invalid_answer_format"}
+            if not parse_answer(chosen_answer[1]):
+                return {**example, "filter_reason": "unsupported_chosen_answer"}
             # Keep the generation prompt boundary even if BPE could merge across the following newline.
-            chosen, rejected = [tokenizer.encode(answer, add_special_tokens=False) for answer in answers]
+            chosen = tokenizer.encode(chosen_answer[0], add_special_tokens=False)
+            rejected = tokenizer.encode(rejected_answer[0], add_special_tokens=False)
             eos = tokenizer.eos_token_id
             if any(eos in response for response in (chosen, rejected)) or chosen == rejected:
                 return {**example, "filter_reason": "invalid_pair"}
@@ -88,8 +134,10 @@ def prepare_post_training_data(stage, source, tokenizer, held_out, length_limit)
     if not len(dataset):
         raise ValueError(f"No eligible {stage.upper()} examples remain: {dict(reasons)}")
     info = {**source, "raw_fingerprint": raw._fingerprint, "fingerprint": dataset._fingerprint,
-            "raw_records": len(raw), "kept_records": len(dataset), "system": system,
+            "raw_records": len(raw), "kept_records": len(dataset), "system": SYSTEM_PROMPT,
             "filter_counts": {reason: count for reason, count in sorted(reasons.items()) if reason}}
+    if stage == "dpo":
+        info["answer_format"] = DPO_ANSWER_FORMAT
     print(f"{stage.upper()} data | raw={len(raw)} | kept={len(dataset)}"
           + "".join(f" | filtered_{reason}={count}" for reason, count in info["filter_counts"].items()), flush=True)
     return dataset, info

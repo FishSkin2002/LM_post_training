@@ -17,7 +17,7 @@ from trl import DPOConfig, DPOTrainer, GRPOConfig, GRPOTrainer
 import yaml
 
 from evaluate_checkpoint import evaluate_checkpoint
-from post_training_data import SOURCES, boxed_reward, prepare_post_training_data
+from post_training_data import DPO_ANSWER_FORMAT, SOURCES, boxed_reward, prepare_post_training_data
 from prepare_sft_data import CONFIG_DIR, load_tokenizer, prepare_dataset, validate_precision
 from train_sft import load_training_model
 from training_workflow import (TerminalPrinterCallback, TerminalProgressCallback, data_plan,
@@ -96,6 +96,8 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None):
         resume, saved, step = read_source(resume, resume=True)
         if saved.get("stage") != stage:
             raise ValueError(f"Resume requires a {stage.upper()} checkpoint.")
+        if stage == "dpo" and saved["data"].get("answer_format") != DPO_ANSWER_FORMAT:
+            raise ValueError("DPO checkpoint uses a different answer format. Start from the SFT final/ with --sft-source.")
         if output_dir is not None and output_dir.expanduser().resolve() != resume.parent:
             raise ValueError("Resume uses the checkpoint's run directory.")
         for key in ("data", "trainer", "max_length", "max_prompt_length"):

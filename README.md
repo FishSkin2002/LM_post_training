@@ -143,7 +143,7 @@ python train_post_sft.py dpo --sft-source /path/to/sft-run/final
 python train_post_sft.py grpo --sft-source /path/to/sft-run/final
 ```
 
-将 `/path/to/sft-run/final` 换成 `configs/training/sft.yaml` 对应运行的 `final/`，两条命令使用同一路径。两个阶段各自更新一份从 SFT 加载的 LoRA，各有优化器和输出目录。DPO 保留 PRM800K `chosen` 和 `rejected` 的原始答案格式。GRPO 在 Skywork 数学题上采样，按最后一个 boxed 答案的数学等价性和原生 EOS 计 0/1 奖励。
+将 `/path/to/sft-run/final` 换成 `configs/training/sft.yaml` 对应运行的 `final/`，两条命令使用同一路径。两个阶段各自更新一份从 SFT 加载的 LoRA，各有优化器和输出目录。DPO 共用 SFT 提示，将 PRM800K 两侧最后的 `# Answer` 转成 `\boxed{...}`，保留推导、答案内容和偏好标签。GRPO 在 Skywork 数学题上采样，按最后一个 boxed 答案的数学等价性和原生 EOS 计 0/1 奖励。
 
 两个阶段都排除与原 SFT 验证题仅有空白差异的训练题。正常结束后先保存 `final/`，再对原 SFT 验证集生成评测。默认配置面向单 GPU。训练机短测可复制对应 YAML，在 `trainer` 下设置 `max_steps` 并指定单独的 `--output-dir`。默认长度和采样组大小是短测的起始值。短测正常结束后同样进入全量评测，可在看到适配器保存完成后单独用 `evaluate_checkpoint.py --num-samples` 做抽样评测。
 
@@ -158,7 +158,7 @@ python train_post_sft.py grpo --sft-source /path/to/sft-run/final
 python train_post_sft.py dpo --resume-from-checkpoint /path/to/dpo-run/checkpoint-100
 ```
 
-恢复 GRPO 时改用 `grpo` 和相应阶段的断点。续训从断点恢复策略、优化器、调度器和进度，按记录的 SFT 产物重建固定参考。原始 SFT `final/` 需保留在保存时的路径。
+恢复 GRPO 时改用 `grpo` 和相应阶段的断点。续训从断点恢复策略、优化器、调度器和进度，按记录的 SFT 产物重建固定参考。原始 SFT `final/` 需保留在保存时的路径。首次切换到 boxed DPO 时，从 SFT `final/` 开启新运行。
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
