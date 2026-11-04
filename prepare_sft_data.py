@@ -46,8 +46,8 @@ def text_format(tokenizer):
     return {**deepcopy(TEXT_FORMAT), "chat_template": tokenizer.chat_template}
 
 
-def messages(question, answer=None):
-    result = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": question}]
+def messages(question, answer=None, *, system=SYSTEM_PROMPT):
+    result = [{"role": "system", "content": system}, {"role": "user", "content": question}]
     if answer is not None:
         result.append({"role": "assistant", "content": answer})
     return result
