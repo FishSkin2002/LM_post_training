@@ -21,7 +21,7 @@ import evaluate_checkpoint as evaluation
 import math_data
 import post_training_data as data
 import train_post_sft as training
-from prepare_sft_data import CONFIG_DIR, build_prompt
+from prepare_sft_data import CONFIG_DIR, SYSTEM_PROMPT, build_prompt
 
 
 def skywork(question, references):
@@ -62,22 +62,38 @@ class PostSFTTests(unittest.TestCase):
 
     def test_dataset_filtering_preserves_roles_and_preference_tokens(self):
         cases = [
-            {"prompt": "question 2", "chosen": "\nCompute\n# Answer\n2", "rejected": "\nCompute\n# Answer\n3"},
+            {"prompt": "question 2", "chosen": "\nCompute\n# Answer\n$2$",
+             "rejected": "\nCompute\n# Answer\n3\n\n# Answer\n0.009259259..."},
             {"prompt": " question\t8\n", "chosen": "2", "rejected": "3"},
-            {"prompt": "question 1", "chosen": "Compute " * 200, "rejected": "3"},
+            {"prompt": "question 1", "chosen": "Compute " * 200 + "\n# Answer\n2", "rejected": r"\boxed{3}"},
+            {"prompt": "question 3", "chosen": "# Answer\nC.\n\n119", "rejected": r"\boxed{3}"},
+            {"prompt": "question 4", "chosen": r"\boxed{2}", "rejected": "# Answer\n" + r"\frac{3}{"},
+            {"prompt": "question 5", "chosen": "# Answer\n100 cm$^2$", "rejected": r"\boxed{3}"},
+            {"prompt": "question 6", "chosen": "# Answer\n0.009259259...", "rejected": r"\boxed{3}"},
+            {"prompt": "question 7", "chosen": "# Answer\n$$\n2\n$$", "rejected": r"\boxed{3}"},
+            {"prompt": "question 9", "chosen": fixtures.trace(2), "rejected": fixtures.trace(3)},
         ]
         source = yaml.safe_load((CONFIG_DIR / "training/dpo.yaml").read_text())["data"]
         with patch.object(data, "load_dataset", return_value=Dataset.from_list(cases)) as loader:
             prepared, info = data.prepare_post_training_data("dpo", source, self.tokenizer, ["question 8"], 128)
         loader.assert_called_once_with(source["name"], "solution", split="train", revision=source["revision"])
-        self.assertEqual(info["filter_counts"], {"held_out_overlap": 1, "over_length": 1})
+        self.assertEqual(info["answer_format"], data.DPO_ANSWER_FORMAT)
+        self.assertEqual(info["system"], SYSTEM_PROMPT)
+        self.assertEqual(info["filter_counts"], {"held_out_overlap": 1, "over_length": 1,
+                                                 "invalid_chosen_format": 3, "unsupported_chosen_answer": 1})
+        self.assertEqual(list(prepared["source_index"]), [0, 4, 8])
         row = prepared[0]
-        self.assertEqual(row["prompt_ids"], self.tokenizer.apply_chat_template(
-            [{"role": "system", "content": data.DPO_SYSTEM}, {"role": "user", "content": cases[0]["prompt"]}],
-            tokenize=True, add_generation_prompt=True, return_dict=False))
+        self.assertEqual(row["prompt_ids"], self.tokenizer.encode(build_prompt(self.tokenizer, cases[0]["prompt"]),
+                                                                 add_special_tokens=False))
+        expected = {"chosen": "\nCompute\n" + r"\boxed{2}",
+                    "rejected": "\nCompute\n# Answer\n3\n\n" + r"\boxed{0.009259259...}"}
         for side in ("chosen", "rejected"):
-            self.assertEqual(row[side + "_ids"], self.tokenizer.encode(cases[0][side], add_special_tokens=False)
+            self.assertEqual(row[side + "_ids"], self.tokenizer.encode(expected[side], add_special_tokens=False)
                              + [self.tokenizer.eos_token_id])
+            self.assertEqual(prepared[2][side + "_ids"], self.tokenizer.encode(cases[-1][side], add_special_tokens=False)
+                             + [self.tokenizer.eos_token_id])
+        self.assertEqual(prepared[1]["rejected_ids"], self.tokenizer.encode(r"\boxed{\frac{3}{}", add_special_tokens=False)
+                         + [self.tokenizer.eos_token_id])
 
         cases = [skywork(" question 2 ", ["1/4", "proof", "3"]), skywork("question\n8", ["2"]),
                  skywork("question 5", ["proof"]), skywork("question " * 200, ["2"])]
@@ -90,6 +106,21 @@ class PostSFTTests(unittest.TestCase):
         self.assertEqual(row["references"], ["1/4", "3"])
         self.assertEqual(self.tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True),
                          build_prompt(self.tokenizer, " question 2 "))
+
+    def test_rejected_answer_preserves_content_and_removes_only_terminal_empty_headings(self):
+        prefix = "Reasoning.\n\n"
+        cases = {
+            "# Answer\n\nC.\n\n119\n": r"\boxed{C." + "\n\n119}",
+            "# Answer\n $21$  ": r"\boxed{$21$}",
+            "# Answer\n\n": "",
+            "# Answe \n\n": "",
+            "# Answer\n3\n\n# Answe\n": "# Answer\n3\n\n",
+            "An unmarked answer.\n": "An unmarked answer.\n",
+            "# Another heading\n": "# Another heading\n",
+        }
+        for original, expected in cases.items():
+            with self.subTest(original=original):
+                self.assertEqual(data._format_rejected_answer(prefix + original), prefix + expected)
 
     def test_boxed_reward_uses_alternatives_and_native_eos(self):
         texts = [r"\boxed{0.25}", r"\boxed{3}", r"\boxed{0.25}", r"\boxed{0.25}", "0.25",
@@ -178,6 +209,21 @@ class PostSFTTests(unittest.TestCase):
             self.assertFalse((partial / "final").exists())
             checkpoint = partial / "checkpoint-1"
             self.assertFalse((checkpoint / "ref").exists())
+            metadata_path = checkpoint / "run.json"
+            if stage == "dpo":
+                original_metadata = metadata_path.read_text()
+                for version in ("boxed-v1", None):
+                    old = json.loads(original_metadata)
+                    if version is None:
+                        del old["data"]["answer_format"]
+                    else:
+                        old["data"]["answer_format"] = version
+                    metadata_path.write_text(json.dumps(old))
+                    with patch.object(training, "prepare_dataset") as prepare, \
+                            self.assertRaisesRegex(ValueError, "different answer format"):
+                        training.train(stage, path, resume=checkpoint)
+                    prepare.assert_not_called()
+                metadata_path.write_text(original_metadata)
             with patch.object(training, trainer_name, ObserveTrainer):
                 resumed = training.train(stage, path, resume=checkpoint)
             calls = model_loader.call_count
@@ -186,7 +232,6 @@ class PostSFTTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already has a saved final adapter"):
                 training.train(stage, path, resume=checkpoint)
             self.assertEqual(model_loader.call_count, calls)
-            metadata_path = checkpoint / "run.json"
             broken = json.loads(metadata_path.read_text())
             broken["source_adapter_sha256"] = "different"
             metadata_path.write_text(json.dumps(broken))
