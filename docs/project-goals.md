@@ -17,13 +17,13 @@
 
 ## 1. 项目目标
 
-基于 Qwen3-4B-Instruct-2507 和公开数学数据，实践 SFT 与 GRPO，研究本项目继续训练对模型数学推理能力的影响。
+基于 Qwen3-4B-Instruct-2507 和公开数学数据，实践 SFT、DPO 与 GRPO，研究各阶段对模型数学推理能力的影响。
 
 ## 2. 技术路线
 
 基础模型：Qwen/Qwen3-4B-Instruct-2507，使用其原生聊天模板；模型选择与样本格式见[模型与样本约定](qwen3-base.md)。
 
-数据集：以 OpenR1-Math-220k 的 R1 生成解答作为主 SFT 数据；保留 GSM8K 读取接口供测试等用途，后续 GRPO 考虑 Skywork-OR1-RL-Data。
+数据集：SFT 使用 OpenR1-Math-220k 的 R1 解答，DPO 使用 `tasksource/prm800k_dpo` 的完整解答偏好对，GRPO 使用 Skywork-OR1-RL-Data 的数学题。保留 GSM8K 读取接口供测试等用途。
 
 训练框架：PyTorch、Transformers、TRL。
 
@@ -31,13 +31,13 @@
 
 1. 对未经本项目训练的同一官方 Instruct 模型做基线评测。
 2. 使用数学题及筛选后的 R1 完整解答进行 SFT，system 放固定任务和 boxed 格式要求，user 保留原题。
-3. 在 SFT 基础上尝试 GRPO，使用可验证的答案奖励。
-4. 统一评测原始模型、SFT 模型和 GRPO 模型。
+3. 从同一 SFT 模型分别开展 DPO 和 GRPO，采用[各自的数据、目标与运行约定](post-training-workflow.md)。
+4. 使用同一批 SFT 验证题统一评测原始模型、SFT 模型、DPO 模型和 GRPO 模型。
 
 ## 3. 核心实验问题
 
 - SFT 是否改善模型的数学题准确率？
-- GRPO 能否在 SFT 基础上进一步改善表现？
+- DPO 和 GRPO 各自能否在 SFT 基础上进一步改善表现？
 - 奖励变化与实际准确率是否一致？
 - 奖励设计或采样参数变化会如何影响训练结果？
 
