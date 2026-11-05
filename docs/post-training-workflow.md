@@ -4,7 +4,7 @@
 
 - DPO 和 GRPO 各自从同一次 `configs/training/sft.yaml` 运行保存的 SFT `final/` 初始化。显式传入产物路径，从中读取底座、LoRA 结构、分词器和 SFT 评测来源。两个阶段各有训练配置、输出目录、优化器、调度器和步数。
 - 各阶段更新从 SFT 加载的策略 LoRA，冻结 `Qwen/Qwen3-4B-Instruct-2507` 底座。DPO 的参考策略固定为初始 SFT。GRPO 启用参考策略约束时使用同一初始 SFT。策略和参考可以共享冻结底座。
-- 使用已通过微型检查的 TRL 1.16.0、Transformers 和 PEFT。沿用 [SFT 约定中的精度与梯度检查点](qwen3-base.md#lora-与已确认的优化)。阶段配置显式记录批量、长度、步数和算法参数。
+- 原生路径使用已通过微型检查的 TRL 1.16.0、Transformers 和 PEFT；vLLM 路径按[vLLM 生成约定](vllm-generation.md)选择并验证配套依赖，不将旧环境的检查结果冒充新组合已经通过。沿用 [SFT 约定中的精度与梯度检查点](qwen3-base.md#lora-与已确认的优化)。阶段配置显式记录批量、长度、步数和算法参数。
 
 ## DPO 偏好数据
 
@@ -21,6 +21,7 @@
 - 使用 [Skywork/Skywork-OR1-RL-Data](https://huggingface.co/datasets/Skywork/Skywork-OR1-RL-Data) 的 `default/math`。取 `prompt` 中的用户题目，解码 `reward_model.ground_truth` 内的 JSON 答案列表，统计并筛除没有任何可解析参考的题目。难度标签仅供了解数据来源。
 - 生成沿用 SFT 的 system、题目原文和原生聊天模板。参考答案只传给奖励函数。每题生成多条回答，奖励沿用[最终答案判定](training-workflow.md#生成答案判定)。正常 EOS 结束且末个 `\boxed{...}` 与任一可解析参考数学等价时奖励为 1，其余为 0。参考答案为 `1/4` 时，正常结束的 `\boxed{0.25}` 得 1 分。
 - 使用 TRL 的 `grpo` 损失与组内奖励归一化。显式设置每题采样数、提示和回答词元预算及参考约束系数，校验生成批量与组大小的整除关系。超长提示在生成前筛除。训练记录奖励、输出长度和截断率。
+- 训练生成默认使用 vLLM colocate，并保留显式原生选项；当前策略同步、EOS/PAD、显存预算和恢复配置以[vLLM 的 GRPO 约定](vllm-generation.md#grpo-训练生成)为准。损失计算和参数更新继续由现有训练框架执行。
 
 ## 共用生成评测
 
