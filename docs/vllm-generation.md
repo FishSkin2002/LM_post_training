@@ -20,6 +20,8 @@
 
 - vLLM 依赖与现有固定依赖需要成套核对。当前项目固定 `torch==2.6.0`；TRL 1.16.0 声明支持 `vllm>=0.22.0,<=0.31.0`，其中 vLLM 0.22.0 的 CUDA 依赖固定 `torch==2.11.0`。不能直接在原有依赖文件追加 vLLM 并宣称兼容。
 - 用户确认另建配套训练/评测环境，保留现有环境供原训练和原生生成使用。配套环境的安装说明、版本锁定及兼容性检查属于功能交付；实现时根据 GPU、驱动与 CUDA 构建选择并固定完整组合，提供可复现的依赖文件和使用说明，未实测的组合明确标注。
+- 用户随后明确训练机目前为 CUDA 12.4，只接受适当升级；核对后同意 CUDA 12.8 与配套 R570 或更高驱动。功能采用 Conda 创建 Python 3.12，再由 pip 安装 PyTorch 2.8.0/cu128、vLLM 0.10.2、TRL 0.27.2、Transformers 4.57.6 的独立环境。该 TRL 版本同时原生保留 SFT 参考适配器与概率差异修正；不为了使用 CUDA 12.4 旧引擎而省略这些机制。
+- 已实测新旧 `datasets` 对同一内容使用不同的 Arrow 指纹。旧 SFT 在原环境通过 `prepared_sft_data.py` 校验并导出准备数据，新环境用 `--prepared-sft-data` 读取。保留导出的原始身份、题目顺序、分词结果和原有划分校验，不靠忽略指纹差异继续运行。分词器类名与特殊词元配置仅在内存中兼容读取，原产物保持原样。
 - 本轮不修改正在运行的训练环境，不安装真实模型或启动正式训练。单凭 `NVIDIA vGPU-32GB` 和显存容量不能确认物理 GPU 架构或支持的二进制构建。
 
 ## 公共评测与抽样生成
@@ -61,3 +63,4 @@
 - [TRL 1.16.0 vLLM 集成](https://huggingface.co/docs/trl/v1.16.0/vllm_integration)：支持范围、模式及训练权重交接。
 - [vLLM 0.22.0 CUDA 依赖](https://raw.githubusercontent.com/vllm-project/vllm/v0.22.0/requirements/cuda.txt)与 [GPU 安装说明](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/)：PyTorch/CUDA 构建需要配套核对。
 - [vLLM LoRA 说明](https://docs.vllm.ai/en/stable/features/lora/)：独立推理可使用底座与适配器。
+- [TRL 0.27.2 GRPO 实现](https://github.com/huggingface/trl/blob/v0.27.2/trl/trainer/grpo_trainer.py)、[vLLM 0.10.2 发布资产](https://github.com/vllm-project/vllm/releases/expanded_assets/v0.10.2)及 [CUDA 12.8 驱动表](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-toolkit-release-notes/index.html)：本次保守升级选择的依据。

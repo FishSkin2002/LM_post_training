@@ -10,16 +10,20 @@
 ├── math_scoring.py              # boxed提取及Math-Verify数学等价判分
 ├── answer_judge.py              # 可配置的 API 裁判、重试及判决解析
 ├── prepare_sft_data.py          # 原生聊天包装、长度统计和assistant-only标签
+├── prepared_sft_data.py         # 导出原环境已校验的 SFT 准备数据，供新环境复用
 ├── train_sft.py                 # 新训练、断点续训、完成后加训
 ├── train_post_sft.py            # 从同一 SFT final 分别训练 DPO 和 GRPO
 ├── post_training_data.py        # PRM800K 偏好对、Skywork 数学题和答案奖励
 ├── evaluate_checkpoint.py       # 原始Instruct或LoRA的同题生成评测
 ├── rescore_evaluation.py        # 已保存 OpenR1 回答的三级重评与人工核查报告
 ├── sample_checkpoint.py         # 原始Instruct或LoRA抽样问答
+├── generation.py                # vLLM/Transformers 公共生成与训练后资源交接
+├── check_vllm_environment.py     # 不加载模型的 GPU/驱动/依赖检查
 ├── training_workflow.py         # 题目组划分、运行状态与终端展示
 ├── configs/
 │   ├── development/sft.yaml     # Instruct数据检查及本地输出路径
 │   ├── evaluation/glm-5.3.yaml  # 官方 GLM-5.3 裁判与请求限制
+│   ├── generation.yaml          # 公共生成引擎，默认 vLLM
 │   └── training/
 │       ├── sft.yaml             # 主线Qwen3-4B-Instruct-2507/OpenR1配置
 │       ├── dpo.yaml             # PRM800K 完整解答偏好对
@@ -44,6 +48,7 @@
 │   └── git_workflow.py          # 受控Git入口及相应测试
 ├── reports/                    # 实验报告
 ├── requirements.txt
+├── requirements-vllm-cu128.txt   # 独立 vLLM 环境的固定依赖
 ├── AGENTS.md
 ├── CONTEXT.md
 ├── task_plan.md
@@ -55,7 +60,26 @@
 
 ## 主要脚本使用说明
 
-在项目根目录使用 Python 3.11 或更新版本运行 `python -m pip install -r requirements.txt`。真实主线固定使用 `Qwen/Qwen3-4B-Instruct-2507`；配置默认BF16底座/计算、FP32 LoRA及非重入激活检查点，训练时关闭KV cache。真实训练需要支持BF16的CUDA设备；CPU/FP32只用于显式配置的随机微型接口检查。
+默认生成引擎为 vLLM。推荐使用独立 Conda 环境，由 Conda 创建 Python，再用 pip 安装依赖：
+
+```bash
+conda create -n qwen-vllm --override-channels -c conda-forge python=3.12 pip -y
+conda activate qwen-vllm
+python -m pip install -r requirements-vllm-cu128.txt
+python check_vllm_environment.py
+```
+
+固定组合为 PyTorch 2.8.0/cu128、vLLM 0.10.2、TRL 0.27.2 和 Transformers 4.57.6。宿主 NVIDIA 驱动需至少 570.26；容器里的 CUDA Toolkit 不会升级宿主驱动。已有 CUDA 12.4/R550 训练机须先选择支持 CUDA 12.8 的驱动/镜像，再使用该环境。系统不必单独安装同版 Toolkit，预编译包自带运行时；真实 GPU 短测仍需通过。
+
+原环境继续使用 `requirements.txt`；运行生成入口时显式加 `--generation-backend transformers`。新 GRPO 配置默认 `trainer.use_vllm: true`，原生训练需在阶段 YAML 显式设为 `false`，该设置与训练结束后的评测引擎分开。旧 GRPO 断点使用原环境及保存时的配置恢复，不将更换引擎或训练库版本当作同一次续训。
+
+真实主线固定使用 `Qwen/Qwen3-4B-Instruct-2507`；配置默认BF16底座/计算、FP32 LoRA及非重入激活检查点，训练时关闭KV cache。真实训练需要支持BF16的CUDA设备；CPU/FP32只用于显式配置的随机微型接口检查。
+
+`train_sft.py`、`train_post_sft.py`、`evaluate_checkpoint.py` 和 `sample_checkpoint.py` 均支持 `--generation-config PATH`（默认 `configs/generation.yaml`）和 `--generation-backend vllm|transformers`。前者控制公共评测/抽样，后者覆盖其中的引擎设置；失败时明确报错，不自动更换引擎。四个模型的对比应统一引擎，切换引擎使用新的评测输出路径。
+
+训练正常结束先保存 `final/` 和状态。vLLM 评测通过替换训练进程启动，先释放训练模型、优化器和 GRPO 推理引擎，再加载保存的产物。可随后独立评测 `final/`，无需重新训练。GRPO 的训练采样保持当前策略同步、固定 SFT 参考、KL 和 0/1 数学奖励；具体要求见[vLLM 生成约定](docs/vllm-generation.md)。
+
+旧环境训练的 SFT 产物可能因新旧 `datasets` 的指纹算法不同而无法直接重新准备出相同身份的数据。先在原环境运行下文的 `prepared_sft_data.py` 导出一次，再为新环境的 DPO/GRPO、独立评测和抽样指定 `--prepared-sft-data /path/to/prepared-sft`。导出保留原划分与指纹，不修改 SFT 产物。
 
 ### prepare_sft_data.py
 
@@ -105,6 +129,8 @@ python train_sft.py
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--config` | `configs/training/sft.yaml` | 轮次、学习率、LoRA、数据、预算及频率设置。 |
 | `--output-dir` | 配置中的 `output_dir` | 新运行目录，重名自动避让。 |
 
@@ -120,6 +146,8 @@ python train_sft.py --resume-from-checkpoint /path/to/run/checkpoint-5000
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--config` | `configs/training/sft.yaml` | 必须与该阶段配置一致。 |
 | `--output-dir` | checkpoint所属运行目录 | 仅允许填写同一目录，不新建后缀。 |
 
@@ -135,8 +163,24 @@ python train_sft.py --continue-from /path/to/previous/final --additional-epochs 
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--config` | `configs/training/sft.yaml` | 新阶段学习率等训练设置；来源协议保持。 |
 | `--output-dir` | 配置路径并自动避重 | 指定新阶段目录。 |
+
+### prepared_sft_data.py
+
+#### 在原 SFT 环境导出准备数据
+
+激活训练该 SFT 时的原环境，在同一份数据缓存仍可用时运行：
+
+```bash
+python prepared_sft_data.py --sft-source /path/to/sft-run/final --output /path/to/prepared-sft
+```
+
+`--output` 必须是新目录。导出前按原 SFT 产物核对完整数据及划分，输出准备数据和身份清单；会保存一份准备数据副本。然后切换到 `qwen-vllm`，在 DPO/GRPO、评测或抽样命令中添加 `--prepared-sft-data /path/to/prepared-sft`。同一份导出可供多个阶段共用，原始模型与训练后模型继续使用同一批验证题。
+
+使用导出的准备数据开始 DPO/GRPO 后，运行信息会记录该路径，后续阶段续训、自动评测和产物抽样默认沿用它；请保留该目录。
 
 ### train_post_sft.py
 
@@ -153,6 +197,9 @@ python train_post_sft.py grpo --sft-source /path/to/sft-run/final
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--prepared-sft-data` | 使用产物已记录的路径，或重新准备 | 读取在原 SFT 环境导出的准备数据，保留原身份与划分。 |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--config` | `configs/training/dpo.yaml` 或 `grpo.yaml` | 指定数据版本、长度、训练步数和算法设置。 |
 | `--output-dir` | 阶段 YAML 的 `output_dir` | 指定新运行目录，重名自动避让。 |
 
@@ -166,6 +213,9 @@ python train_post_sft.py dpo --resume-from-checkpoint /path/to/dpo-run/checkpoin
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--prepared-sft-data` | 使用产物已记录的路径，或重新准备 | 读取在原 SFT 环境导出的准备数据，保留原身份与划分。 |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--config` | 对应阶段的训练 YAML | 指定与断点一致的阶段配置。 |
 | `--output-dir` | checkpoint 所属运行目录 | 显式填写时须指向同一目录。 |
 
@@ -185,6 +235,9 @@ python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--prepared-sft-data` | 使用产物已记录的路径，或重新准备 | 读取在原 SFT 环境导出的准备数据，保留原身份与划分。 |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--config` | `configs/training/sft.yaml` | 指定与待比较SFT相同的数据、精度和预算。 |
 | `--sft-source` | 按配置生成固定划分 | 指向待比较的 SFT `final/`，用产物保存的准确划分、模板和预算。与 `--config` 互斥。 |
 | `--num-samples` | 完整验证集 | 选固定顺序前N题，须为合法正整数。 |
@@ -205,6 +258,9 @@ SFT、DPO 和 GRPO 均可通过该命令评测。报告区分训练阶段，共�
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--prepared-sft-data` | 使用产物已记录的路径，或重新准备 | 读取在原 SFT 环境导出的准备数据，保留原身份与划分。 |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--num-samples` | 完整验证集 | 固定顺序前N题，超范围报错。 |
 | `--batch-size` | `4` | 固定模式的每批最大题数，或自适应模式的起始题数，须为正整数。 |
 | `--auto-batch-size` | 固定批大小 | 启用成功翻倍、失败后缩小批次的自适应模式。 |
@@ -289,6 +345,9 @@ python sample_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507 --local-fil
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--prepared-sft-data` | 使用产物已记录的路径，或重新准备 | 读取在原 SFT 环境导出的准备数据，保留原身份与划分。 |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--config` | `configs/training/sft.yaml` | 原始模型的数据、精度和默认预算。 |
 | `--num-samples` | `5` | 抽题数，须不超过数据大小。 |
 | `--seed` | `42` | 固定抽题。 |
@@ -309,6 +368,9 @@ python sample_checkpoint.py --checkpoint /path/to/run/final
 
 | 参数 | 默认行为 | 用途 |
 | --- | --- | --- |
+| `--prepared-sft-data` | 使用产物已记录的路径，或重新准备 | 读取在原 SFT 环境导出的准备数据，保留原身份与划分。 |
+| `--generation-config` | `configs/generation.yaml` | 公共评测/抽样的生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
 | `--num-samples` | `5` | 抽题数。 |
 | `--seed` | `42` | 固定抽题以便对照。 |
 | `--max-new-tokens` | 来源保存的预算 | 覆盖本次抽样上限。 |

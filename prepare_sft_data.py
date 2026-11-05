@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 import yaml
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
+import transformers
 from datasets.fingerprint import Hasher
 
 from math_data import OPENR1, clean_answer, load_math_data
@@ -36,7 +37,18 @@ def load_config(path):
 
 
 def load_tokenizer(source, *, local_files_only=False):
-    tokenizer = AutoTokenizer.from_pretrained(source, local_files_only=local_files_only)
+    # Transformers 5 saves the generic fast backend under a class name absent in 4.x.
+    # Read its existing tokenizer.json without rewriting vocabulary, template, or artifacts.
+    config_path = Path(source) / "tokenizer_config.json"
+    saved = json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
+    legacy_loader = int(transformers.__version__.split(".")[0]) < 5
+    backend = saved.get("tokenizer_class") == "TokenizersBackend" and legacy_loader
+    options = {}
+    if legacy_loader and isinstance(saved.get("extra_special_tokens"), list):
+        options = {"extra_special_tokens": {}, "additional_special_tokens": saved["extra_special_tokens"]}
+    loader = PreTrainedTokenizerFast if backend else AutoTokenizer
+    tokenizer = loader.from_pretrained(source, local_files_only=local_files_only, **options)
+    tokenizer.model_input_names = ["input_ids", "attention_mask"]
     if not tokenizer.chat_template or tokenizer.eos_token != TEXT_FORMAT["eos_token"] or tokenizer.pad_token != TEXT_FORMAT["pad_token"]:
         raise ValueError("The Instruct tokenizer requires its native chat template, EOS and PAD.")
     return tokenizer

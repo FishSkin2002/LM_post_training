@@ -1,24 +1,22 @@
 """Evaluate original Instruct or LoRA on the same held-out math questions."""
 
 import argparse
-from contextlib import suppress
-import gc
 import json
 from pathlib import Path
 from textwrap import indent
 import time
 
 from datasets.fingerprint import Hasher
-from peft import PeftModel
 import torch
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM
 
-from prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer, model_dtype, prepare_dataset,
+from prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer, prepare_dataset,
                               require_model, text_format, validate_precision)
 from math_scoring import SCORING, score_answer
 from math_data import dataset_label
 from sample_checkpoint import generate_answers
+from generation import add_generation_arguments, create_generator, load_generation_config
+from prepared_sft_data import add_prepared_data_argument, load_prepared_sft_data
 from training_workflow import data_plan, format_metrics, read_source
 
 DEFAULT_BATCH_SIZE = 4
@@ -50,7 +48,8 @@ def readable_prediction(position, prediction):
 
 def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, output=None, device=None,
                         model=None, tokenizer=None, dataset=None, data_info=None, config=None, disable_tqdm=False,
-                        sft_source=None, batch_size=DEFAULT_BATCH_SIZE, auto_batch_size=False):
+                        sft_source=None, batch_size=DEFAULT_BATCH_SIZE, auto_batch_size=False,
+                        generation_config=None, generation_backend=None, prepared_sft_data=None):
     if type(batch_size) is not int or batch_size < 1:
         raise ValueError("batch-size must be a positive integer.")
     if (checkpoint is None) == (model_name is None):
@@ -61,6 +60,7 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     stage = "original"
     if checkpoint is not None:
         checkpoint, metadata, _ = read_source(checkpoint)
+        prepared_sft_data = prepared_sft_data or metadata.get("prepared_sft_data")
         stage = metadata.get("stage", "sft")
         sft_source = metadata.get("source_adapter") if stage in ("dpo", "grpo") else None
         metadata = metadata.get("evaluation", metadata)
@@ -78,13 +78,15 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
             raise ValueError("Model and configuration differ.")
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     validate_precision(config, device)
+    generation_settings = load_generation_config(generation_config, generation_backend)
     if tokenizer is None:
         tokenizer = load_tokenizer(checkpoint or sft_source or model_name, local_files_only=True)
     if metadata and text_format(tokenizer) != metadata["text_format"]:
         raise ValueError("Source tokenizer template differs.")
     source_type = "lora" if checkpoint is not None else "original"
     if dataset is None:
-        dataset, data_info = prepare_dataset(config, tokenizer)
+        dataset, data_info = (load_prepared_sft_data(prepared_sft_data, config, tokenizer) if prepared_sft_data
+                              else prepare_dataset(config, tokenizer))
     elif data_info is None and metadata is not None:
         data_info = metadata["data"]["source"]
     plan = data_plan(dataset, metadata, data_info)
@@ -117,16 +119,12 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     batch_mode = "adaptive" if auto_batch_size else "fixed"
     print(f"Generation batch size: {batch_size} ({batch_mode})", flush=True)
     print(f"Readable answers: {readable_path}", flush=True)
-    if model is None:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype=model_dtype(config), local_files_only=True,
-            adapter_kwargs={"local_files_only": True},
-        )
-        if checkpoint is not None:
-            model = PeftModel.from_pretrained(model, checkpoint, local_files_only=True)
-        model.to(device)
-    was_training = model.training
-    model.eval()
+    generator = None
+    if len(predictions) < len(rows):
+        generator = create_generator(model_name, checkpoint, tokenizer, config, generation_settings, device, model=model)
+        if generation_settings["backend"] == "transformers":
+            model = generator.model
+        print(f"Generation engine: {generator.description}", flush=True)
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         with progress_path.open("a", encoding="utf-8") as saved, \
@@ -146,8 +144,12 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                     actual_batch_size = min(next_batch_size, len(rows) - start)
                     batch = rows.select(range(start, start + actual_batch_size))
                     started = time.perf_counter()
+                    initialization_before = generator.initialization_runtime
                     try:
-                        answers = generate_answers(model, tokenizer, batch["question"], config["max_new_tokens"])
+                        if generation_settings["backend"] == "transformers":
+                            answers = generate_answers(model, tokenizer, batch["question"], config["max_new_tokens"])
+                        else:
+                            answers = generator.generate(batch["question"], config["max_new_tokens"])
                         if len(answers) != actual_batch_size:
                             raise RuntimeError(f"Generation returned {len(answers)} answers for {actual_batch_size} questions.")
                     except Exception as error:
@@ -163,11 +165,9 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                     else:
                         break
                     # Release the failed call's traceback before collecting its tensors.
-                    gc.collect()
-                    if model.device.type == "cuda":
-                        with suppress(RuntimeError):
-                            torch.cuda.empty_cache()
-                time_share = (time.perf_counter() - started) / actual_batch_size
+                    generator.recover()
+                initialization_delta = generator.initialization_runtime - initialization_before
+                time_share = max(0, time.perf_counter() - started - initialization_delta) / actual_batch_size
                 if probing:
                     last_successful_size = actual_batch_size
                     next_batch_size = actual_batch_size * 2
@@ -182,7 +182,8 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                                   "answer": text, "generated_tokens": count, "correct": correct,
                                   "format_valid": valid, "truncated": truncated,
                                   "generation_batch_size": actual_batch_size,
-                                  "generation_runtime": time_share + score_time}
+                                  "generation_runtime": time_share + score_time,
+                                  "generation_engine": generator.description}
                     saved.write(json.dumps(prediction, ensure_ascii=False) + "\n")
                     saved.flush()
                     readable.write(readable_prediction(position, prediction))
@@ -190,11 +191,13 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                     predictions.append(prediction)
                     progress.update(1)
     finally:
-        model.train(was_training)
+        if generator is not None:
+            generator.close()
     results = [(row["correct"], row["format_valid"], row["truncated"]) for row in predictions]
     elapsed = sum(row["generation_runtime"] for row in predictions)
     metrics = answer_metrics(results)
     metrics.update(generation_runtime=elapsed, generation_samples_per_second=len(results) / max(elapsed, 1e-9))
+    metrics["generation_initialization_runtime"] = generator.initialization_runtime if generator else 0.0
     report = {
         "source_type": source_type, "stage": stage, "model_name": model_name,
         "checkpoint": str(checkpoint) if checkpoint is not None else None,
@@ -204,7 +207,8 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         "text_format": text_format(tokenizer), "precision": "bf16" if config.get("bf16") else "fp32",
         "generation": {"do_sample": False, "max_new_tokens": config["max_new_tokens"],
                        "eos_token_id": tokenizer.eos_token_id, "batch_size": batch_size,
-                       "auto_batch_size": auto_batch_size},
+                       "auto_batch_size": auto_batch_size, "requested_backend": generation_settings["backend"],
+                       "engine": generator.description if generator else None},
         "scoring": SCORING,
         "metrics": metrics, "predictions": predictions,
     }
@@ -231,12 +235,16 @@ def main():
                         help="Double successful generation batches until the first failure, then retry with smaller batches.")
     parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
+    add_generation_arguments(parser)
+    add_prepared_data_argument(parser)
     args = parser.parse_args()
     try:
         evaluate_checkpoint(args.checkpoint, model_name=args.model_name, num_samples=args.num_samples,
                             output=args.output, device=args.device,
                             config=load_config(args.config) if args.checkpoint is None and args.config else None,
-                            sft_source=args.sft_source, batch_size=args.batch_size, auto_batch_size=args.auto_batch_size)
+                            sft_source=args.sft_source, batch_size=args.batch_size, auto_batch_size=args.auto_batch_size,
+                            generation_config=args.generation_config, generation_backend=args.generation_backend,
+                            prepared_sft_data=args.prepared_sft_data)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 
