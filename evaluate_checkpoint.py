@@ -1,6 +1,8 @@
 """Evaluate original Instruct or LoRA on the same held-out math questions."""
 
 import argparse
+from contextlib import suppress
+import gc
 import json
 from pathlib import Path
 from textwrap import indent
@@ -48,7 +50,7 @@ def readable_prediction(position, prediction):
 
 def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, output=None, device=None,
                         model=None, tokenizer=None, dataset=None, data_info=None, config=None, disable_tqdm=False,
-                        sft_source=None, batch_size=DEFAULT_BATCH_SIZE):
+                        sft_source=None, batch_size=DEFAULT_BATCH_SIZE, auto_batch_size=False):
     if type(batch_size) is not int or batch_size < 1:
         raise ValueError("batch-size must be a positive integer.")
     if (checkpoint is None) == (model_name is None):
@@ -112,7 +114,8 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         for prediction in predictions:
             prediction.setdefault("generation_batch_size", 1)
     print(f"Generation progress: {len(predictions)}/{len(rows)} completed; {progress_path}", flush=True)
-    print(f"Generation batch size: {batch_size}", flush=True)
+    batch_mode = "adaptive" if auto_batch_size else "fixed"
+    print(f"Generation batch size: {batch_size} ({batch_mode})", flush=True)
     print(f"Readable answers: {readable_path}", flush=True)
     if model is None:
         model = AutoModelForCausalLM.from_pretrained(
@@ -135,12 +138,40 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
             for position, prediction in enumerate(predictions):
                 readable.write(readable_prediction(position, prediction))
             readable.flush()
-            for start in range(len(predictions), len(rows), batch_size):
-                batch = rows.select(range(start, min(start + batch_size, len(rows))))
-                actual_batch_size = len(batch)
-                started = time.perf_counter()
-                answers = generate_answers(model, tokenizer, batch["question"], config["max_new_tokens"])
+            next_batch_size = batch_size
+            last_successful_size = 0
+            probing = auto_batch_size
+            while len(predictions) < len(rows):
+                start = len(predictions)
+                while True:
+                    actual_batch_size = min(next_batch_size, len(rows) - start)
+                    batch = rows.select(range(start, start + actual_batch_size))
+                    started = time.perf_counter()
+                    try:
+                        answers = generate_answers(model, tokenizer, batch["question"], config["max_new_tokens"])
+                        if len(answers) != actual_batch_size:
+                            raise RuntimeError(f"Generation returned {len(answers)} answers for {actual_batch_size} questions.")
+                    except Exception as error:
+                        if not auto_batch_size or actual_batch_size == 1:
+                            raise
+                        if probing and 0 < last_successful_size < actual_batch_size:
+                            next_batch_size = last_successful_size
+                        else:
+                            next_batch_size = actual_batch_size // 2
+                        probing = False
+                        progress.write(f"Generation batch of {actual_batch_size} failed ({type(error).__name__}: {error}). "
+                                       f"Retrying question {start + 1} with batch size {next_batch_size}.")
+                    else:
+                        break
+                    # Release the failed call's traceback before collecting its tensors.
+                    gc.collect()
+                    if model.device.type == "cuda":
+                        with suppress(RuntimeError):
+                            torch.cuda.empty_cache()
                 time_share = (time.perf_counter() - started) / actual_batch_size
+                if probing:
+                    last_successful_size = actual_batch_size
+                    next_batch_size = actual_batch_size * 2
                 for position, (row, answer) in enumerate(zip(batch, answers, strict=True), start=start):
                     text, count, truncated = answer
                     started = time.perf_counter()
@@ -173,7 +204,8 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                  "fingerprint": plan["fingerprint"], "split_seed": plan["split_seed"]},
         "text_format": text_format(tokenizer), "precision": "bf16" if config.get("bf16") else "fp32",
         "generation": {"do_sample": False, "max_new_tokens": config["max_new_tokens"],
-                       "eos_token_id": tokenizer.eos_token_id, "batch_size": batch_size},
+                       "eos_token_id": tokenizer.eos_token_id, "batch_size": batch_size,
+                       "auto_batch_size": auto_batch_size},
         "scoring": SCORING,
         "metrics": metrics, "predictions": predictions,
     }
@@ -195,7 +227,9 @@ def main():
                                    help="Anchor original-model evaluation to the exact held-out split of an SFT artifact.")
     parser.add_argument("--num-samples", type=int, help="Evaluate the first N validation questions; default: all.")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
-                        help="Maximum questions per generation batch (default: %(default)s).")
+                        help="Fixed batch size or starting size with --auto-batch-size (default: %(default)s).")
+    parser.add_argument("--auto-batch-size", action="store_true",
+                        help="Double successful generation batches until the first failure, then retry with smaller batches.")
     parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
     args = parser.parse_args()
@@ -203,7 +237,7 @@ def main():
         evaluate_checkpoint(args.checkpoint, model_name=args.model_name, num_samples=args.num_samples,
                             output=args.output, device=args.device,
                             config=load_config(args.config) if args.checkpoint is None and args.config else None,
-                            sft_source=args.sft_source, batch_size=args.batch_size)
+                            sft_source=args.sft_source, batch_size=args.batch_size, auto_batch_size=args.auto_batch_size)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 

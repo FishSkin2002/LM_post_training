@@ -150,7 +150,8 @@ class InstructSFTTests(unittest.TestCase):
         self.terminal, self.progress = terminal.getvalue(), progress.getvalue()
         return Path(next(line.split(": ", 1)[1] for line in self.terminal.splitlines() if line.startswith("Output directory:")))
 
-    def evaluate(self, checkpoint=None, *, rows=None, count=None, output=None, original=False, batch_size=None):
+    def evaluate(self, checkpoint=None, *, rows=None, count=None, output=None, original=False, batch_size=None,
+                 auto_batch_size=False):
         self.evaluation_count += 1
         path = output or self.root/f"eval-{self.evaluation_count}.json"
         cfg = self.root/"eval.yaml"
@@ -161,6 +162,8 @@ class InstructSFTTests(unittest.TestCase):
             argv += ["--num-samples", str(count)]
         if batch_size is not None:
             argv += ["--batch-size", str(batch_size)]
+        if auto_batch_size:
+            argv.append("--auto-batch-size")
         with patch.object(sys, "argv", argv), \
                 patch.object(math_data, "load_dataset", return_value=Dataset.from_list(rows or self.raw)), \
                 patch.object(AutoTokenizer, "from_pretrained", side_effect=self.load_tokenizer), \
@@ -518,6 +521,98 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual([row["generation_batch_size"] for row in report["predictions"]], [4, 4, 4, 4, 1])
         self.assertEqual(report["metrics"]["generation_runtime"], 26)
         self.assertEqual(report["metrics"]["generation_samples_per_second"], 5 / 26)
+
+    def test_adaptive_batch_doubles_then_falls_back_and_halves(self):
+        self.raw = [raw_row(i) for i in range(290)]
+        failures = {3: torch.OutOfMemoryError("test OOM"), 5: RuntimeError("test generation failure")}
+        attempts = []
+
+        def generate(model, tokenizer, questions, budget):
+            attempts.append(list(questions))
+            if len(attempts) in failures:
+                raise failures[len(attempts)]
+            return [(trace(question.rsplit(" ", 1)[-1]), 4, False) for question in questions]
+
+        def collect():
+            self.assertIsNone(sys.exc_info()[0])
+
+        with patch.object(evaluation, "generate_answers", side_effect=generate), \
+                patch.object(evaluation, "gc") as garbage:
+            garbage.collect.side_effect = collect
+            report = self.evaluate(original=True, batch_size=4, auto_batch_size=True)
+        self.assertEqual([len(batch) for batch in attempts], [4, 8, 16, 8, 8, 4, 4, 1])
+        self.assertEqual(attempts[3], attempts[2][:8])
+        self.assertEqual(attempts[5], attempts[4][:4])
+        self.assertEqual(garbage.collect.call_count, 2)
+        self.assertIn("Retrying question 13 with batch size 8.", self.eval_terminal)
+        self.assertIn("Retrying question 21 with batch size 4.", self.eval_terminal)
+        self.assertEqual([row["index"] for row in report["predictions"]], report["data"]["indices"])
+        self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],
+                         [4] * 4 + [8] * 16 + [4] * 8 + [1])
+        self.assertEqual(report["metrics"]["answer_accuracy"], 1)
+        self.assertTrue(report["generation"]["auto_batch_size"])
+        self.assertEqual(report["generation"]["batch_size"], 4)
+
+    def test_adaptive_first_failure_and_single_question_error_preserve_progress(self):
+        self.raw = [raw_row(i) for i in range(90)]
+        output = self.root / "adaptive.json"
+        progress_path = output.with_suffix(".progress.jsonl")
+        failure = RuntimeError("one question still failed")
+        attempts = []
+
+        def generate(model, tokenizer, questions, budget):
+            attempts.append(list(questions))
+            if len(attempts) in (1, 4):
+                raise RuntimeError("batch failed")
+            if len(attempts) == 6:
+                raise failure
+            return [(trace(question.rsplit(" ", 1)[-1]), 4, False) for question in questions]
+
+        with patch.object(evaluation, "generate_answers", side_effect=generate), self.assertRaises(RuntimeError) as caught:
+            self.evaluate(original=True, output=output, batch_size=4, auto_batch_size=True)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual([len(batch) for batch in attempts], [4, 2, 2, 2, 1, 1])
+        self.assertEqual(attempts[0][:2], attempts[1])
+        self.assertEqual(attempts[3][:1], attempts[4])
+        first = progress_path.read_bytes()
+        saved_questions = [json.loads(line)["question"] for line in first.splitlines()]
+        self.assertEqual(saved_questions, attempts[1] + attempts[2] + attempts[4])
+        def finish(model, tokenizer, questions, budget):
+            return [("invalid", 4, True)] * len(questions)
+
+        with patch.object(evaluation, "generate_answers", side_effect=finish) as called:
+            report = self.evaluate(original=True, output=output, batch_size=3, auto_batch_size=True)
+        self.assertEqual([len(call.args[2]) for call in called.call_args_list], [3, 1])
+        self.assertEqual(list(called.call_args_list[0].args[2])[:1], attempts[-1])
+        self.assertTrue(progress_path.read_bytes().startswith(first))
+        self.assertEqual(report["metrics"]["generation_samples"], 9)
+        self.assertEqual(report["generation"]["batch_size"], 3)
+
+    def test_adaptive_failed_short_tail_halves_the_actual_batch(self):
+        self.raw = [raw_row(i) for i in range(60)]
+        with patch.object(evaluation, "generate_answers", side_effect=[
+            [("invalid", 4, True)] * 4, RuntimeError("short tail failed"),
+            [("invalid", 4, True)], [("invalid", 4, True)],
+        ]) as called:
+            report = self.evaluate(original=True, auto_batch_size=True)
+        self.assertEqual([len(call.args[2]) for call in called.call_args_list], [4, 2, 1, 1])
+        self.assertEqual(report["metrics"]["generation_truncation_rate"], 1)
+
+    def test_fixed_failure_and_adaptive_scoring_or_interrupt_are_not_retried(self):
+        for automatic, error in ((False, RuntimeError("fixed failed")), (True, KeyboardInterrupt())):
+            with self.subTest(automatic=automatic), patch.object(evaluation, "generate_answers", side_effect=error) as called:
+                with self.assertRaises(type(error)) as caught:
+                    self.evaluate(original=True, auto_batch_size=automatic)
+                self.assertIs(caught.exception, error)
+                called.assert_called_once()
+
+        output = self.root / "scoring.json"
+        with patch.object(evaluation, "generate_answers", return_value=[("answer", 2, False)] * 2) as generated, \
+                patch.object(evaluation, "score_answer", side_effect=[(True, True, False), Interrupted("scoring failed")]):
+            with self.assertRaisesRegex(Interrupted, "scoring failed"):
+                self.evaluate(original=True, output=output, auto_batch_size=True)
+        generated.assert_called_once()
+        self.assertEqual(len(output.with_suffix(".progress.jsonl").read_text().splitlines()), 1)
 
     def test_interruption_skips_evaluation_and_failed_final_evaluation_is_retryable(self):
         with patch.object(train_sft,"evaluate_checkpoint") as called,self.assertRaises(Interrupted):
