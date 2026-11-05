@@ -19,12 +19,18 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import answer_judge as api
 import rescore_evaluation as rescoring
+import math_scoring as scoring
 
 
-def row(index, *, reference="2", r1=r"\boxed{3}", answer=r"\boxed{4}", truncated=False):
+def row(index, *, reference="2", r1=r"\boxed{3}", answer=r"\boxed{4}", truncated=False, correct=None):
+    if correct is None:
+        try:
+            correct = scoring.score_answer(answer, reference, truncated)[0]
+        except ValueError:
+            correct = False
     return {"index": index, "source_index": index + 100, "generation_index": 1,
             "question": f"Problem {index}", "reference_final_answer": reference,
-            "reference_answer": r1, "answer": answer, "correct": False,
+            "reference_answer": r1, "answer": answer, "correct": correct,
             "format_valid": True, "truncated": truncated, "generated_tokens": 25,
             "generation_runtime": 2, "generation_batch_size": 4}
 
@@ -74,10 +80,11 @@ class RescoringTests(unittest.TestCase):
                 self.input, output=self.output, config_path=self.config_path, disable_tqdm=True, **kwargs)
 
     def test_first_stage_and_truncation_stop_before_r1_and_api(self):
-        rows = [row(0, answer=r"\boxed{\frac{4}{2}}"),
+        rows = [row(0, answer=r"\boxed{999}", correct=True),
                 row(1, reference="proof", r1=r"\boxed{2}", answer=r"\boxed{2}", truncated=True)]
         self.write_input(rows)
-        with patch.object(rescoring, "single_formal_box", side_effect=AssertionError("R1 must not run")), \
+        with patch.object(scoring, "score_answer", side_effect=AssertionError("Saved stage one must not be recomputed")), \
+                patch.object(rescoring, "single_formal_box", side_effect=AssertionError("R1 must not run")), \
                 patch.object(api, "urlopen", side_effect=AssertionError("API must not run")):
             report = self.run_rescoring()
         self.assertEqual([r["correct"] for r in report["predictions"]], [True, False])
@@ -168,11 +175,14 @@ class RescoringTests(unittest.TestCase):
             self.assertIn(f"## Dataset index {index}\n", audit)
         for index in (0, 1, 4):
             self.assertNotIn(f"## Dataset index {index}\n", audit)
-        self.assertIn("API incorrect (1)", audit)
-        self.assertIn("Pending review (2)", audit)
+        self.assertIn("## API incorrect\n", audit)
+        self.assertIn("## Pending review\n", audit)
+        prior_files = {path: path.read_bytes() for path in self.root.glob("rescored*")}
         with patch.object(api, "urlopen", side_effect=AssertionError("Completed/pending results are reused")):
             repeated = self.run_rescoring()
         self.assertEqual(repeated["metrics"], report["metrics"])
+        for path, content in prior_files.items():
+            self.assertEqual(path.read_bytes(), content)
 
     def test_pending_retries_do_not_repeat_completed_calls_or_double_count(self):
         self.write_input([row(0), row(1)])
@@ -188,7 +198,7 @@ class RescoringTests(unittest.TestCase):
         with patch.object(api, "urlopen", side_effect=AssertionError("No extra calls")):
             self.assertEqual(self.run_rescoring()["metrics"], retried["metrics"])
 
-    def test_interrupt_keeps_decisions_and_rebuilds_reports(self):
+    def test_interrupt_keeps_decisions_and_only_appends_new_markdown(self):
         self.write_input([row(0), row(1), row(2)])
         with patch.object(api, "urlopen", side_effect=[response(completion()), KeyboardInterrupt()]):
             with self.assertRaises(KeyboardInterrupt):
@@ -196,12 +206,21 @@ class RescoringTests(unittest.TestCase):
         partial = json.loads(self.output.read_text())
         self.assertEqual(partial["metrics"]["confirmed_correct"], 1)
         self.assertEqual(partial["metrics"]["unprocessed_samples"], 2)
-        self.output.with_suffix(".md").unlink()
+        markdown = self.output.with_suffix(".md")
+        prefix = markdown.read_bytes()
+        audit_prefix = self.output.with_suffix(".api-review.md").read_bytes()
+        original_render = rescoring.readable_row
+        def render_new_only(item):
+            self.assertNotEqual(item["index"], 0, "Historical answers must not be rendered again.")
+            return original_render(item)
         with patch.object(api, "urlopen", side_effect=[response(completion()), response(completion())]) as request:
-            finished = self.run_rescoring()
+            with patch.object(rescoring, "readable_row", side_effect=render_new_only):
+                finished = self.run_rescoring()
         self.assertEqual(request.call_count, 2)
         self.assertEqual(finished["metrics"]["answer_accuracy"], 1)
-        self.assertTrue(self.output.with_suffix(".md").is_file())
+        self.assertTrue(markdown.read_bytes().startswith(prefix))
+        self.assertTrue(self.output.with_suffix(".api-review.md").read_bytes().startswith(audit_prefix))
+        self.assertEqual(markdown.read_text().count("## Dataset index 0\n"), 1)
 
     def test_ledger_survives_report_write_failure(self):
         self.write_input([row(0)])
@@ -212,30 +231,25 @@ class RescoringTests(unittest.TestCase):
         with patch.object(api, "urlopen", side_effect=AssertionError("Saved verdict must be reused")):
             self.assertEqual(self.run_rescoring()["metrics"]["confirmed_correct"], 1)
 
-    def test_changed_input_config_or_prompt_cannot_reuse_progress(self):
+    def test_resume_uses_indices_without_revalidating_historical_content(self):
         original = self.write_input([row(0)])
         with patch.object(api, "urlopen", return_value=response(completion())):
             self.run_rescoring()
-        for kind in ("input", "config", "prompt"):
-            with self.subTest(kind=kind), patch.object(api, "urlopen", side_effect=AssertionError("Must fail before request")):
-                changed = deepcopy(original)
-                if kind == "input":
-                    changed["predictions"][0]["question"] += " changed"
-                self.input.write_text(json.dumps(changed))
-                config = {**self.config, "max_tokens": 4097 if kind == "config" else self.config["max_tokens"]}
-                self.config_path.write_text(yaml.safe_dump(config))
-                with patch.object(rescoring, "JUDGE_PROMPT", api.JUDGE_PROMPT + ("changed" if kind == "prompt" else "")):
-                    with self.assertRaisesRegex(ValueError, "differs"):
-                        self.run_rescoring()
+        original["predictions"][0]["question"] = "Historical text is not checked."
+        del original["predictions"][0]["reference_answer"]
+        self.input.write_text(json.dumps(original))
+        self.config_path.write_text(yaml.safe_dump({**self.config, "max_tokens": 4097}))
+        prefix = self.output.with_suffix(".md").read_bytes()
+        with patch.object(rescoring, "grade_prediction", side_effect=AssertionError("No old regrading")), \
+                patch.object(rescoring, "readable_row", side_effect=AssertionError("No old rendering")):
+            repeated = self.run_rescoring()
+        self.assertEqual(repeated["metrics"]["confirmed_correct"], 1)
+        self.assertEqual(self.output.with_suffix(".md").read_bytes(), prefix)
 
     def test_bad_reports_and_output_collisions_are_rejected(self):
         valid = self.write_input([row(0), row(1)])
         invalid = []
-        for key in ("question", "reference_answer", "answer", "truncated", "source_index"):
-            bad = deepcopy(valid)
-            del bad["predictions"][0][key]
-            invalid.append(bad)
-        for indices in ([0, 0], [0], [1, 0]):
+        for indices in ([0],):
             bad = deepcopy(valid)
             bad["data"]["indices"] = indices
             invalid.append(bad)
@@ -337,33 +351,22 @@ class RescoringTests(unittest.TestCase):
         with patch.object(api, "urlopen", return_value=BytesIO(b'{"usage": NaN}')):
             self.assertEqual(api.APIJudge(self.config)(row(0))["reason"], "invalid_api_response")
 
-    def test_corrupt_progress_cannot_trigger_new_calls_or_change_reports(self):
+    def test_existing_progress_is_read_without_schema_rechecks(self):
         self.write_input([row(0)])
         with patch.object(api, "urlopen", return_value=response(completion())):
             self.run_rescoring()
         ledger = self.output.with_suffix(".progress.jsonl")
         original = ledger.read_text()
-        old_report = self.output.read_bytes()
         header, entry = [json.loads(line) for line in original.splitlines()]
-        invalid_entries = []
-        for value in (None, -1, float("inf")):
-            changed = deepcopy(entry)
-            changed["result"]["rescoring_runtime"] = value
-            invalid_entries.append(changed)
-        changed = deepcopy(entry)
-        changed["result"]["stages"]["stage3"]["status"] = "not_run"
-        invalid_entries.append(changed)
-        changed = deepcopy(entry)
-        changed["index"] = 999
-        invalid_entries.append(changed)
-        for changed in invalid_entries:
-            ledger.write_text(json.dumps(header) + "\n" + json.dumps(changed) + "\n")
-            with patch.object(api, "urlopen", side_effect=AssertionError("No new calls")), self.assertRaises(ValueError):
-                self.run_rescoring()
-            self.assertEqual(self.output.read_bytes(), old_report)
+        header = {"type": "run", "legacy_settings": True}
+        entry["result"]["stages"]["stage1"] = {"status": "legacy_saved_result"}
+        ledger.write_text(json.dumps(header) + "\n" + json.dumps(entry) + "\n")
+        with patch.object(rescoring, "grade_prediction", side_effect=AssertionError("No new calls")):
+            report = self.run_rescoring()
+        self.assertEqual(report["metrics"]["confirmed_correct"], 1)
         ledger.write_text(original + json.dumps(entry) + "\n")
-        with self.assertRaisesRegex(ValueError, "Duplicate"):
-            self.run_rescoring()
+        with patch.object(rescoring, "grade_prediction", side_effect=AssertionError("No new calls")):
+            self.assertEqual(self.run_rescoring()["metrics"]["confirmed_correct"], 1)
 
     def test_config_validation_and_cli_have_no_training_imports(self):
         for patch_config in (

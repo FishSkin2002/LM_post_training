@@ -1,9 +1,7 @@
 """Rescore a completed OpenR1 evaluation JSON without generating answers."""
 
 import argparse
-import hashlib
 import json
-import math
 from pathlib import Path
 import re
 from textwrap import indent
@@ -11,10 +9,10 @@ import time
 
 from tqdm.auto import tqdm
 
-from answer_judge import APIJudge, DEFAULT_CONFIG, JUDGE_PROMPT, PROMPT_VERSION, decode_json, load_judge_config
-from math_scoring import SCORING, boxed_answer, parse_answer, score_answer, verify
+from answer_judge import APIJudge, DEFAULT_CONFIG, PROMPT_VERSION, decode_json, load_judge_config
+from math_scoring import SCORING, boxed_answer, parse_answer, verify
 
-PROTOCOL = "openr1-three-stage-v1"
+PROTOCOL = "openr1-three-stage-v2"
 
 
 def load_evaluation(path):
@@ -32,29 +30,13 @@ def load_evaluation(path):
             or data["source"].get("name") != "open-r1/OpenR1-Math-220k"):
         raise ValueError("Input must contain nonempty OpenR1 predictions and data metadata.")
     indices = data.get("indices")
-    if (not isinstance(indices, list) or len(indices) != len(rows)
-            or any(type(i) is not int or i < 0 for i in indices)
-            or len(set(indices)) != len(indices)):
-        raise ValueError("Input evaluation indices must be unique and match the prediction count.")
+    if not isinstance(indices, list) or len(indices) != len(rows):
+        raise ValueError("Input evaluation indices must match the prediction count.")
     metrics = report.get("metrics")
     if (not isinstance(metrics, dict) or type(metrics.get("generation_samples")) is not int
             or metrics["generation_samples"] != len(rows)):
         raise ValueError("Input generation_samples must match all saved predictions.")
-    for position, row in enumerate(rows):
-        if not isinstance(row, dict) or row.get("index") != indices[position]:
-            raise ValueError(f"Prediction {position} does not match the evaluation indices.")
-        for key in ("index", "source_index", "generation_index"):
-            if type(row.get(key)) is not int or row[key] < 0:
-                raise ValueError(f"Prediction {position} has an invalid {key}.")
-        for key in ("question", "reference_final_answer", "reference_answer", "answer"):
-            if not isinstance(row.get(key), str):
-                raise ValueError(f"Prediction {position} requires text field {key}.")
-        if not row["question"].strip():
-            raise ValueError(f"Prediction {position} has an empty question.")
-        for key in ("correct", "format_valid", "truncated"):
-            if type(row.get(key)) is not bool:
-                raise ValueError(f"Prediction {position} requires boolean field {key}.")
-    return report, hashlib.sha256(raw).hexdigest()
+    return report
 
 
 def single_formal_box(text):
@@ -77,11 +59,10 @@ def grade_rules(row):
         stages["stage1"] = {"status": "failed", "reason": "truncated"}
         result["correct"] = False
         return result
-    try:
-        correct, valid, _ = score_answer(row["answer"], row["reference_final_answer"])
-        reason = "equivalent" if correct else "different_from_reference" if valid else "invalid_model_box"
-    except ValueError:
-        correct, reason = False, "unsupported_reference"
+    # Generation has already executed stage one. Use its saved decision.
+    correct = row["correct"]
+    reason = ("saved_reference_pass" if correct else
+              "saved_reference_failure" if row["format_valid"] else "saved_invalid_model_box")
     stages["stage1"] = {"status": "passed" if correct else "failed", "reason": reason}
     if correct:
         result["correct"] = True
@@ -157,7 +138,7 @@ def readable_row(row):
     return "\n\n".join(lines) + "\n\n---\n\n"
 
 
-def save_reports(source, results, metadata, output):
+def save_report(source, results, metadata, output, *, write=True):
     metrics = summarize(results, len(source["predictions"]))
     predictions = []
     for row in source["predictions"]:
@@ -173,64 +154,49 @@ def save_reports(source, results, metadata, output):
               "scoring": metadata["protocol"], "rescoring": metadata,
               "metrics": {**source["metrics"], **metrics}, "pending_review_indices": pending,
               "predictions": predictions}
-    atomic_write(output, json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
-    header = (f"# Answer rescoring\n\nConfirmed accuracy: {metrics['answer_accuracy']:.2%} "
-              f"({metrics['confirmed_correct']}/{metrics['generation_samples']})\n\n"
-              f"Pending review: {metrics['pending_review']} | Unprocessed: {metrics['unprocessed_samples']}\n\n"
-              f"Pending dataset indices: {', '.join(map(str, pending)) or 'none'}\n\n")
-    atomic_write(output.with_suffix(".md"), header + "".join(readable_row(row) for row in predictions))
-    audit = header + "# API review\n\n"
-    for title, verdict in (("API correct", True), ("API incorrect", False), ("Pending review", None)):
-        selected = [row for row in predictions if row["decision_stage"] == 3 and row["correct"] is verdict]
-        audit += f"## {title} ({len(selected)})\n\n"
-        audit += "".join(readable_row(row) for row in selected) or "None.\n\n"
-    atomic_write(output.with_suffix(".api-review.md"), audit)
+    if write:
+        atomic_write(output, json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
     return report
 
 
-def load_progress(path, metadata, indices):
+def summary_text(report):
+    metrics = report["metrics"]
+    pending = report["pending_review_indices"]
+    return (f"## Summary\n\nConfirmed accuracy: {metrics['answer_accuracy']:.2%} "
+              f"({metrics['confirmed_correct']}/{metrics['generation_samples']})\n\n"
+              f"Pending review: {metrics['pending_review']} | Unprocessed: {metrics['unprocessed_samples']}\n\n"
+              f"API cases: {metrics['api_samples']} | API confirmed correct: {metrics['stage3_correct']}\n\n"
+              f"Pending dataset indices: {', '.join(map(str, pending)) or 'none'}\n\n")
+
+
+def append_markdown(path, content, title):
+    with path.open("a", encoding="utf-8") as readable:
+        if readable.tell() == 0:
+            readable.write(f"# {title}\n\nLatest summary is at the end of this file. "
+                           "Repeated indices show later decisions below.\n\n")
+        readable.write(content)
+
+
+def append_decision(output, row, decision):
+    prediction = {**row, "original_correct": row["correct"], **decision}
+    content = readable_row(prediction)
+    append_markdown(output.with_suffix(".md"), content, "Answer rescoring")
+    if decision["decision_stage"] == 3:
+        label = {True: "API correct", False: "API incorrect", None: "Pending review"}[decision["correct"]]
+        append_markdown(output.with_suffix(".api-review.md"),
+                        f"## {label}\n\n" + content, "API review")
+
+
+def load_progress(path):
     if not path.exists():
         return {}
     results = {}
     with path.open(encoding="utf-8") as saved:
-        try:
-            header = decode_json(next(saved))
-            if header != {"type": "run", **metadata}:
-                raise ValueError("Rescoring input, judge configuration, prompt, or protocol differs; use a new output.")
-            for line in saved:
-                entry = decode_json(line)
-                index, result = entry["index"], entry["result"]
-                if (entry.get("type") != "decision" or index not in indices or type(index) is not int
-                        or type(result["decision_stage"]) is not int or result["decision_stage"] not in (1, 2, 3)
-                        or (result["correct"] is not None and type(result["correct"]) is not bool)):
-                    raise ValueError("Invalid rescoring progress record.")
-                runtime = result["rescoring_runtime"]
-                if type(runtime) not in (int, float) or not math.isfinite(runtime) or runtime < 0:
-                    raise ValueError("Invalid rescoring runtime.")
-                stages = result["stages"]
-                if (not isinstance(stages, dict) or set(stages) != {"stage1", "stage2", "stage3"}
-                        or any(not isinstance(stage, dict) for stage in stages.values())):
-                    raise ValueError("Invalid rescoring stages.")
-                expected = {
-                    1: ("passed" if result["correct"] else "failed", "not_run", "not_run"),
-                    2: ("failed", "passed", "not_run"),
-                    3: ("failed", "failed", "pending" if result["correct"] is None
-                        else "passed" if result["correct"] else "failed"),
-                }[result["decision_stage"]]
-                if (tuple(stages[f"stage{i}"]["status"] for i in (1, 2, 3)) != expected
-                        or (result["decision_stage"] in (1, 2) and result["correct"] is None)
-                        or (result["decision_stage"] == 2 and result["correct"] is not True)):
-                    raise ValueError("Inconsistent rescoring stage results.")
-                attempts = stages["stage3"].get("attempts", [])
-                if not isinstance(attempts, list) or any(
-                        not isinstance(attempt, dict) or type(attempt.get("runtime")) not in (int, float)
-                        or not math.isfinite(attempt["runtime"]) or attempt["runtime"] < 0 for attempt in attempts):
-                    raise ValueError("Invalid saved API attempts.")
-                if index in results and results[index]["correct"] is not None:
-                    raise ValueError("Duplicate completed rescoring decision.")
-                results[index] = result
-        except (StopIteration, KeyError, TypeError, json.JSONDecodeError) as error:
-            raise ValueError("Invalid rescoring progress file; the original generation file is not a rescoring ledger.") from error
+        for line in saved:
+            entry = json.loads(line)
+            if entry.get("type") == "decision":
+                # Restore saved decisions by index; do not revalidate their contents.
+                results[entry["index"]] = entry["result"]
     return results
 
 
@@ -243,15 +209,14 @@ def rescore_evaluation(input_path, *, output=None, config_path=DEFAULT_CONFIG,
                  output.with_suffix(".progress.jsonl")]
     if input_path in artifacts or output.suffix != ".json":
         raise ValueError("Use a new .json output path; the input report is preserved.")
-    source, digest = load_evaluation(input_path)
+    source = load_evaluation(input_path)
     config = load_judge_config(config_path)
-    metadata = {"input_sha256": digest,
+    metadata = {"input_file": str(input_path),
                 "protocol": {"name": PROTOCOL, "math_scoring": SCORING,
-                             "prompt_version": PROMPT_VERSION,
-                             "prompt_sha256": hashlib.sha256(JUDGE_PROMPT.encode()).hexdigest()},
+                             "prompt_version": PROMPT_VERSION},
                 "judge": config}
     progress_path = output.with_suffix(".progress.jsonl")
-    results = load_progress(progress_path, metadata, set(source["data"]["indices"]))
+    results = load_progress(progress_path)
     if not progress_path.exists() and any(path.exists() for path in artifacts):
         raise ValueError("Output artifacts exist without their rescoring progress file; use a new output.")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -259,10 +224,11 @@ def rescore_evaluation(input_path, *, output=None, config_path=DEFAULT_CONFIG,
     rows = source["predictions"]
     work = [row for row in rows if row["index"] not in results or
             (retry_pending and results[row["index"]]["correct"] is None)]
+    update_summary = bool(work) or not output.exists()
     print(f"Rescoring input: {input_path}\nReport: {output}\nAPI review: {output.with_suffix('.api-review.md')}", flush=True)
     try:
         with progress_path.open("a", encoding="utf-8") as saved:
-            if saved.tell() == 0:
+            if work:
                 saved.write(json.dumps({"type": "run", **metadata}, ensure_ascii=False, allow_nan=False) + "\n")
                 saved.flush()
             counts = summarize(results, len(rows))
@@ -276,11 +242,16 @@ def rescore_evaluation(input_path, *, output=None, config_path=DEFAULT_CONFIG,
                                            ensure_ascii=False, allow_nan=False) + "\n")
                     saved.flush()
                     results[index] = decision
+                    append_decision(output, row, decision)
                     confirmed += (decision["correct"] is True) - (previous is not None and previous["correct"] is True)
                     pending += (decision["correct"] is None) - (previous is not None and previous["correct"] is None)
                     progress.set_postfix_str(f"correct={confirmed}/{len(rows)}, pending={pending}", refresh=False)
     finally:
-        report = save_reports(source, results, metadata, output)
+        report = save_report(source, results, metadata, output, write=update_summary)
+        if update_summary:
+            for path, title in ((output.with_suffix(".md"), "Answer rescoring"),
+                                (output.with_suffix(".api-review.md"), "API review")):
+                append_markdown(path, summary_text(report), title)
         metrics = report["metrics"]
         print(f"Confirmed accuracy: {metrics['answer_accuracy']:.2%} "
               f"({metrics['confirmed_correct']}/{len(rows)}) | Pending review: {metrics['pending_review']} "

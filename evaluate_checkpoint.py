@@ -130,13 +130,12 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         with progress_path.open("a", encoding="utf-8") as saved, \
-                readable_path.open("w", encoding="utf-8") as readable, tqdm(
+                readable_path.open("a", encoding="utf-8") as readable, tqdm(
                 total=len(rows), initial=len(predictions), desc="Generate validation answers",
                 unit="question", disable=disable_tqdm) as progress:
-            readable.write(f"# Math generation evaluation ({data_label})\n\nSource type: {source_type}\n\nStage: {stage}\n\n"
-                           f"Model: `{model_name}`\n\nSource: `{checkpoint or model_name}`\n\n")
-            for position, prediction in enumerate(predictions):
-                readable.write(readable_prediction(position, prediction))
+            if readable.tell() == 0:
+                readable.write(f"# Math generation evaluation ({data_label})\n\nSource type: {source_type}\n\nStage: {stage}\n\n"
+                               f"Model: `{model_name}`\n\nSource: `{checkpoint or model_name}`\n\n")
             readable.flush()
             next_batch_size = batch_size
             last_successful_size = 0
