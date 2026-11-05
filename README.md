@@ -8,15 +8,18 @@
 .
 ├── math_data.py                 # OpenR1/GSM8K统一读取、R1筛选与来源索引
 ├── math_scoring.py              # boxed提取及Math-Verify数学等价判分
+├── answer_judge.py              # 可配置的 API 裁判、重试及判决解析
 ├── prepare_sft_data.py          # 原生聊天包装、长度统计和assistant-only标签
 ├── train_sft.py                 # 新训练、断点续训、完成后加训
 ├── train_post_sft.py            # 从同一 SFT final 分别训练 DPO 和 GRPO
 ├── post_training_data.py        # PRM800K 偏好对、Skywork 数学题和答案奖励
 ├── evaluate_checkpoint.py       # 原始Instruct或LoRA的同题生成评测
+├── rescore_evaluation.py        # 已保存 OpenR1 回答的三级重评与人工核查报告
 ├── sample_checkpoint.py         # 原始Instruct或LoRA抽样问答
 ├── training_workflow.py         # 题目组划分、运行状态与终端展示
 ├── configs/
 │   ├── development/sft.yaml     # Instruct数据检查及本地输出路径
+│   ├── evaluation/glm-5.3.yaml  # 官方 GLM-5.3 裁判与请求限制
 │   └── training/
 │       ├── sft.yaml             # 主线Qwen3-4B-Instruct-2507/OpenR1配置
 │       ├── dpo.yaml             # PRM800K 完整解答偏好对
@@ -36,6 +39,7 @@
 ├── tools/
 │   ├── test_instruct_sft.py     # 随机微型模型离线集成检查
 │   ├── test_post_sft.py         # DPO、GRPO 与共用评测离线检查
+│   ├── test_rescore_evaluation.py # 三级重评与模拟 API 离线检查
 │   ├── fixtures/               # 测试用固定版本官方模板
 │   └── git_workflow.py          # 受控Git入口及相应测试
 ├── reports/                    # 实验报告
@@ -218,6 +222,59 @@ SFT、DPO 和 GRPO 均可通过该命令评测。报告区分训练阶段，共�
 
 评分取最后一个 `\boxed{...}`，处理嵌套花括号，再用固定版本Math-Verify比较参考终值，支持分数/小数等数学等价；A–E选项使用字符串解析，忽略大小写。当前不会根据题干把选项字母换算成数值答案，参考值为数字而输出字母时会判错。最后一个boxed缺失、未闭合、不可解析或生成截断均计错，不回退从推导末尾猜数字；不检查过程是否正确。报告同时给格式有效率和截断率。数学等价只用于生成评分，SFT仍按参考词元交叉熵训练。完整协议见[训练运行约定](docs/training-workflow.md)。
 
+### rescore_evaluation.py
+
+#### 准备 API 裁判凭据
+
+在运行重评的 Bash 终端中输入密钥：
+
+```bash
+read -rsp 'GLM API Key: ' ZAI_API_KEY
+export ZAI_API_KEY
+```
+
+默认裁判配置为 `configs/evaluation/glm-5.3.yaml`，使用官方 `glm-5.3` 接口，密钥从 `ZAI_API_KEY` 读取。配置中可调整基础地址、模型名、凭据环境变量、超时、最大尝试次数、重试间隔、输出预算及模型支持的 `request_parameters`。默认每次请求超时 180 秒，最多尝试 3 次，输出预算 4096 tokens；不会在配置或报告中保存密钥。
+
+切换到 DeepSeek 时，复制 YAML 并填写官方基础地址、实际模型名及对应凭据环境变量，再通过 `--config` 选择。`request_parameters` 直接对应请求体中的附加参数，不能覆盖模型、消息、流式模式及输出预算。
+
+#### 对完整生成报告从头判分
+
+```bash
+python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json
+```
+
+把路径替换为生成完成的 OpenR1 JSON 报告及新的输出路径。原始 Instruct、SFT、DPO、GRPO 的报告均可使用；不接受生成过程中的 JSONL，不重新生成答案或加载 Qwen 权重。现有生成入口和 GRPO 奖励继续使用原有评分。
+
+第一级执行现有检查：截断直接判错并停止，判正确也停止；其余结果进入第二级。第二级只比较 R1 和模型正式回答里的单个完整非空 boxed，通过后停止，否则调用 API。API 无法确定、返回内容不符合要求或请求失败均记为待复核。明确的思考结束边界为 `</think>`，没有边界时检查全文。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | `configs/evaluation/glm-5.3.yaml` | 选择服务地址、实际裁判模型和请求设置。 |
+| `--output` | 输入文件同目录的 `原文件名-rescored.json` | 指定新报告的基础名，不能覆盖输入。 |
+| `--retry-pending` | 复用已有待复核判决 | 本次重新尝试待复核题；已明确判决的题继续复用。 |
+
+以 `evaluation-rescored.json` 为输出时，同时保存：
+
+- `.progress.jsonl`：本次独立重评的逐题判决，随判分立即保存，用于继续运行。
+- `.json`：整体正确率和完整逐题结果，保留原报告的指标与原判分。
+- `.md`：完整阅读版，显示正确比例、正确题数/总题数、待复核数量及题号。
+- `.api-review.md`：所有进入第三级的题目，按 API 判对、判错、待复核分组，含前两级失败原因、原题、参考、回答及 API 判分依据。
+
+JSON 和 Markdown 在完成或中断时汇总生成。正确率始终为已确认正确数除以全部输入题数，待复核题保留在分母里；API 新增正确会自动计入，不重复累加。截断题在第一级终止，不进入 API 或待复核列表。中断时另报尚未处理的题数。完整规则见[独立重评约定](docs/evaluation-rescoring.md)。
+
+#### 继续重评或重试待复核题
+
+```bash
+python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json --retry-pending
+```
+
+同一输入、配置和输出路径会复用已完成判决，继续处理尚未判分的题。加上 `--retry-pending` 时，每道待复核题本轮再尝试一次裁判调用流程，之前的尝试记录一并保留。输入、模型、提示或配置变化时使用新的输出路径。若只需继续中断的运行、暂不重试已有待复核题，省略此开关。缺少凭据时，仅需 API 的题记为待复核，设置凭据后可用该命令继续。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | `configs/evaluation/glm-5.3.yaml` | 沿用首次重评的裁判配置。 |
+| `--retry-pending` | 省略时复用待复核记录 | 本次重新尝试待复核题。 |
+
 ### sample_checkpoint.py
 
 #### 查看原始Instruct的问答
@@ -294,6 +351,16 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_instruct_sft.py
 | `-v` | 关闭详细逐项输出 | 显示测试名称。 |
 | `-q` | 默认unittest输出 | 简略显示。 |
 | `-k` | 全部 | 按名称筛选。 |
+
+### tools/test_rescore_evaluation.py
+
+#### 离线检查三级重评
+
+```bash
+python tools/test_rescore_evaluation.py
+```
+
+使用真实 Math-Verify 和模拟 HTTP 响应检查三级路由、截断拦截、API 协议及重试、待复核、正确率汇总、人工核查明细、输入保护和继续处理。不调用真实付费 API；裁判的实际判分质量需人工核查。可用 `-v` 查看逐项结果。
 
 ### tools/test_post_sft.py
 
