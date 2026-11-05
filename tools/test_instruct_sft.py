@@ -380,7 +380,7 @@ class InstructSFTTests(unittest.TestCase):
             self.evaluate(run/"final",count=1)
             self.assertEqual(before,(run/"final/adapter_model.safetensors").read_bytes())
 
-    def test_append_flush_count_resume_markdown_rebuild_and_complete_reuse(self):
+    def test_append_flush_count_resume_without_rechecking_or_rewriting_history(self):
         self.raw=[raw_row(i) for i in range(60)]
         output=self.root/"resume.json"; calls=[]
         def generate(model,tokenizer,questions,budget):
@@ -399,11 +399,18 @@ class InstructSFTTests(unittest.TestCase):
         del old["generation_batch_size"]
         progress_path.write_text(json.dumps(old)+"\n")
         first=progress_path.read_bytes()
-        output.with_suffix(".md").unlink()
+        markdown_prefix=output.with_suffix(".md").read_bytes()
         def invalid(model,tokenizer,questions,budget):
             return [("invalid",4,True)]*len(questions)
-        with patch.object(evaluation,"generate_answers",side_effect=invalid) as called:
+        original_render=evaluation.readable_prediction
+        def render_new_only(position,prediction):
+            self.assertGreater(position,0,"Historical Markdown must not be rendered again.")
+            return original_render(position,prediction)
+        with patch.object(evaluation,"generate_answers",side_effect=invalid) as called, \
+                patch.object(evaluation,"readable_prediction",side_effect=render_new_only), \
+                patch.object(evaluation,"score_answer",wraps=scoring.score_answer) as score:
             report=self.evaluate(original=True,output=output)
+        self.assertEqual(score.call_count,5)
         self.assertEqual([len(call.args[2]) for call in called.call_args_list],[4,1])
         self.assertEqual([question for call in called.call_args_list for question in call.args[2]],
                          [self.raw[i]["problem"] for i in report["data"]["indices"][1:]])
@@ -412,10 +419,15 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["generation_truncation_rate"],5/6)
         self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],[1,4,4,4,4,1])
         self.assertEqual(output.with_suffix(".md").read_text().count("## Question "),6)
-        with patch.object(evaluation,"generate_answers",side_effect=AssertionError("already complete")):
+        self.assertTrue(output.with_suffix(".md").read_bytes().startswith(markdown_prefix))
+        completed_markdown=output.with_suffix(".md").read_bytes()
+        with patch.object(evaluation,"generate_answers",side_effect=AssertionError("already complete")), \
+                patch.object(evaluation,"score_answer",side_effect=AssertionError("No historical rescoring")), \
+                patch.object(evaluation,"readable_prediction",side_effect=AssertionError("No historical Markdown rendering")):
             again=self.evaluate(original=True,output=output)
         self.assertEqual(again["predictions"],report["predictions"])
         self.assertIn("6/6 completed",self.eval_terminal)
+        self.assertEqual(output.with_suffix(".md").read_bytes(),completed_markdown)
 
     def test_all_outcomes_and_summary_failure_reuse_saved_records(self):
         self.raw=[raw_row(i) for i in range(40)]

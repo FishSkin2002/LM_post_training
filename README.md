@@ -8,15 +8,18 @@
 .
 ├── math_data.py                 # OpenR1/GSM8K统一读取、R1筛选与来源索引
 ├── math_scoring.py              # boxed提取及Math-Verify数学等价判分
+├── answer_judge.py              # 可配置的 API 裁判、重试及判决解析
 ├── prepare_sft_data.py          # 原生聊天包装、长度统计和assistant-only标签
 ├── train_sft.py                 # 新训练、断点续训、完成后加训
 ├── train_post_sft.py            # 从同一 SFT final 分别训练 DPO 和 GRPO
 ├── post_training_data.py        # PRM800K 偏好对、Skywork 数学题和答案奖励
 ├── evaluate_checkpoint.py       # 原始Instruct或LoRA的同题生成评测
+├── rescore_evaluation.py        # 已保存 OpenR1 回答的三级重评与人工核查报告
 ├── sample_checkpoint.py         # 原始Instruct或LoRA抽样问答
 ├── training_workflow.py         # 题目组划分、运行状态与终端展示
 ├── configs/
 │   ├── development/sft.yaml     # Instruct数据检查及本地输出路径
+│   ├── evaluation/glm-5.3.yaml  # 官方 GLM-5.3 裁判与请求限制
 │   └── training/
 │       ├── sft.yaml             # 主线Qwen3-4B-Instruct-2507/OpenR1配置
 │       ├── dpo.yaml             # PRM800K 完整解答偏好对
@@ -36,6 +39,7 @@
 ├── tools/
 │   ├── test_instruct_sft.py     # 随机微型模型离线集成检查
 │   ├── test_post_sft.py         # DPO、GRPO 与共用评测离线检查
+│   ├── test_rescore_evaluation.py # 三级重评与模拟 API 离线检查
 │   ├── fixtures/               # 测试用固定版本官方模板
 │   └── git_workflow.py          # 受控Git入口及相应测试
 ├── reports/                    # 实验报告
@@ -210,13 +214,66 @@ SFT、DPO 和 GRPO 均可通过该命令评测。报告区分训练阶段，共�
 
 两种模型来源互斥。生成使用贪心和保存的 `max_new_tokens`，初始检查配置为8192；前后比较固定预算，不提供标准解答，遇im_end停止。数据身份进入默认路径，避免复用旧Base或另一数据集的进度文件。
 
-自动生成评测也默认每批最多 4 题。每批返回后按题序逐题评分、追加并 flush `.progress.jsonl`，再同步 `.md` 阅读版，最后写 `.json` 汇总。逐题记录题目、完整参考解答、参考终值、模型回答、原始索引、token 数、判分、截断、实际批大小和分摊耗时。
+自动生成评测也默认每批最多 4 题。每批返回后按题序逐题评分、追加并 flush `.progress.jsonl`，再向 `.md` 追加新题，最后写 `.json` 汇总。逐题记录题目、完整参考解答、参考终值、模型回答、原始索引、token 数、判分、截断、实际批大小和分摊耗时。
 
 启用 `--auto-batch-size` 后，每批生成成功就翻倍，直到首次生成异常。首次异常优先回到最后成功的较小批次，首批即异常或尾批已经更小时则直接减半。此后遇到异常就减半，从同一题重试。单题仍异常时报告原错误。
 
-中断后使用相同来源、数据、题数和输出路径重跑，可调整批大小和模式。已有 N 条就从第 N+1 题继续，自适应模式从本次指定的起始大小重新试探。错误、格式无效及截断记录同样复用。Markdown 丢失时从 JSONL 重建。批生成耗时在该批题目间均分，每题另计评分耗时。汇总将保存的耗时相加，旧记录按单题批次读入。从头重评使用新的 `--output`。
+中断后使用相同来源、数据、题数和输出路径重跑，可调整批大小和模式。已有 N 条就从第 N+1 题继续，自适应模式从本次指定的起始大小重新试探。错误、格式无效及截断记录同样复用，不重新核验；Markdown 只追加新题，不重建旧正文。批生成耗时在该批题目间均分，每题另计评分耗时。汇总将保存的耗时相加，旧记录按单题批次读入。从头重评使用新的 `--output`。
 
 评分取最后一个 `\boxed{...}`，处理嵌套花括号，再用固定版本Math-Verify比较参考终值，支持分数/小数等数学等价；A–E选项使用字符串解析，忽略大小写。当前不会根据题干把选项字母换算成数值答案，参考值为数字而输出字母时会判错。最后一个boxed缺失、未闭合、不可解析或生成截断均计错，不回退从推导末尾猜数字；不检查过程是否正确。报告同时给格式有效率和截断率。数学等价只用于生成评分，SFT仍按参考词元交叉熵训练。完整协议见[训练运行约定](docs/training-workflow.md)。
+
+### rescore_evaluation.py
+
+#### 准备 API 裁判凭据
+
+在运行重评的 Bash 终端中输入密钥：
+
+```bash
+read -rsp 'GLM API Key: ' ZAI_API_KEY
+export ZAI_API_KEY
+```
+
+默认裁判配置为 `configs/evaluation/glm-5.3.yaml`，使用官方 `glm-5.3` 接口，密钥从 `ZAI_API_KEY` 读取。配置中可调整基础地址、模型名、凭据环境变量、超时、最大尝试次数、重试间隔、输出预算及模型支持的 `request_parameters`。默认每次请求超时 180 秒，最多尝试 3 次，输出预算 4096 tokens；不会在配置或报告中保存密钥。
+
+切换到 DeepSeek 时，复制 YAML 并填写官方基础地址、实际模型名及对应凭据环境变量，再通过 `--config` 选择。`request_parameters` 直接对应请求体中的附加参数，不能覆盖模型、消息、流式模式及输出预算。
+
+#### 对完整生成报告补充后续判分
+
+```bash
+python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json
+```
+
+把路径替换为生成完成的 OpenR1 JSON 报告及新的输出路径。原始 Instruct、SFT、DPO、GRPO 的报告均可使用；不接受生成过程中的 JSONL，不重新生成答案或加载 Qwen 权重。现有生成入口和 GRPO 奖励继续使用原有评分。
+
+第一级已在生成阶段完成，直接沿用保存的 `correct`、`format_valid` 和 `truncated`，不重新数学核验。截断或一级判正确的题直接结束；其余结果进入第二级。第二级只比较 R1 和模型正式回答里的单个完整非空 boxed，通过后停止，否则调用 API。API 无法确定、返回内容不符合要求或请求失败均记为待复核。明确的思考结束边界为 `</think>`，没有边界时检查全文。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | `configs/evaluation/glm-5.3.yaml` | 选择服务地址、实际裁判模型和请求设置。 |
+| `--output` | 输入文件同目录的 `原文件名-rescored.json` | 指定新报告的基础名，不能覆盖输入。 |
+| `--retry-pending` | 复用已有待复核判决 | 本次重新尝试待复核题；已明确判决的题继续复用。 |
+
+以 `evaluation-rescored.json` 为输出时，同时保存：
+
+- `.progress.jsonl`：本次独立重评的逐题判决，随判分立即保存，用于继续运行。
+- `.json`：整体正确率和完整逐题结果，保留原报告的指标与原判分。
+- `.md`：逐题追加的阅读版，最新正确比例、正确题数/总题数、待复核数量及题号在文末。
+- `.api-review.md`：追加所有进入第三级的题目，标明 API 判对、判错或待复核，含前两级失败原因、原题、参考、回答及 API 判分依据。
+
+JSON 在完成或中断时更新汇总，Markdown 每题追加，并在文末追加本次汇总。已有正文不读取或重写；重试待复核题时追加新的判决，同一索引以较后的判决为准。正确率始终为已确认正确数除以全部输入题数，待复核题保留在分母里；API 新增正确会自动计入，不重复累加。截断题在第一级终止，不进入 API 或待复核列表。中断时另报尚未处理的题数。完整规则见[独立重评约定](docs/evaluation-rescoring.md)。
+
+#### 继续重评或重试待复核题
+
+```bash
+python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json --retry-pending
+```
+
+继续时只按已保存的索引跳过旧记录，不核查历史题目、判决内容或配置身份，只追加未处理的题。读取保存的判决供正确率汇总，不重新计算旧分数。加上 `--retry-pending` 才会再次处理已有待复核题，之前的尝试记录一并保留。输入、模型、提示或配置变化时自行选择新的输出路径。缺少凭据时，仅需 API 的题记为待复核，设置凭据后可用该命令继续。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | `configs/evaluation/glm-5.3.yaml` | 沿用首次重评的裁判配置。 |
+| `--retry-pending` | 省略时复用待复核记录 | 本次重新尝试待复核题。 |
 
 ### sample_checkpoint.py
 
@@ -294,6 +351,16 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_instruct_sft.py
 | `-v` | 关闭详细逐项输出 | 显示测试名称。 |
 | `-q` | 默认unittest输出 | 简略显示。 |
 | `-k` | 全部 | 按名称筛选。 |
+
+### tools/test_rescore_evaluation.py
+
+#### 离线检查三级重评
+
+```bash
+python tools/test_rescore_evaluation.py
+```
+
+使用真实 Math-Verify 和模拟 HTTP 响应检查三级路由、截断拦截、API 协议及重试、待复核、正确率汇总、人工核查明细、输入保护和继续处理。不调用真实付费 API；裁判的实际判分质量需人工核查。可用 `-v` 查看逐项结果。
 
 ### tools/test_post_sft.py
 
