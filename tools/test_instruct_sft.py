@@ -150,7 +150,7 @@ class InstructSFTTests(unittest.TestCase):
         self.terminal, self.progress = terminal.getvalue(), progress.getvalue()
         return Path(next(line.split(": ", 1)[1] for line in self.terminal.splitlines() if line.startswith("Output directory:")))
 
-    def evaluate(self, checkpoint=None, *, rows=None, count=None, output=None, original=False):
+    def evaluate(self, checkpoint=None, *, rows=None, count=None, output=None, original=False, batch_size=None):
         self.evaluation_count += 1
         path = output or self.root/f"eval-{self.evaluation_count}.json"
         cfg = self.root/"eval.yaml"
@@ -159,6 +159,8 @@ class InstructSFTTests(unittest.TestCase):
         argv += ["--model-name", self.model_name] if original else ["--checkpoint", str(checkpoint)]
         if count is not None:
             argv += ["--num-samples", str(count)]
+        if batch_size is not None:
+            argv += ["--batch-size", str(batch_size)]
         with patch.object(sys, "argv", argv), \
                 patch.object(math_data, "load_dataset", return_value=Dataset.from_list(rows or self.raw)), \
                 patch.object(AutoTokenizer, "from_pretrained", side_effect=self.load_tokenizer), \
@@ -352,52 +354,65 @@ class InstructSFTTests(unittest.TestCase):
             self.assertIn(label, self.progress)
 
     def test_end_evaluation_after_save_once_with_separate_reference_and_no_optimizer(self):
-        def generate(model,tokenizer,question,budget):
+        def generate(model,tokenizer,questions,budget):
             final=self.root/"end/final"
             self.assertTrue((final/"adapter_model.safetensors").is_file())
             self.assertEqual(json.loads((final.parent/"trainer_state.json").read_text())["global_step"],18)
             self.assertEqual(budget,4)
             self.assertFalse(model.training)
-            return trace(question.rsplit(" ",1)[-1]),4,False
-        with patch.object(evaluation,"generate_answer",side_effect=generate) as called:
+            return [(trace(question.rsplit(" ",1)[-1]),4,False) for question in questions]
+        with patch.object(evaluation,"generate_answers",side_effect=generate) as called:
             run=self.run_training("end")
-        self.assertEqual(called.call_count,2)
+        self.assertEqual(called.call_count,1)
         self.assertEqual(len(self.model_calls),1)
         report=json.loads(self.final(run).read_text())
         self.assertEqual(report["metrics"]["answer_accuracy"],1)
+        self.assertEqual(report["generation"]["batch_size"],4)
+        self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],[2,2])
         for row in report["predictions"]:
             self.assertEqual(row["reference_answer"],self.raw[row["source_index"]]["generations"][1])
             self.assertEqual(row["reference_final_answer"],self.raw[row["source_index"]]["answer"])
-        with patch.object(evaluation,"generate_answer",return_value=(trace(0),4,False)):
+        with patch.object(evaluation,"generate_answers",return_value=[(trace(0),4,False)]):
             before=(run/"final/adapter_model.safetensors").read_bytes()
             self.evaluate(run/"final",count=1)
             self.assertEqual(before,(run/"final/adapter_model.safetensors").read_bytes())
 
     def test_append_flush_count_resume_markdown_rebuild_and_complete_reuse(self):
+        self.raw=[raw_row(i) for i in range(60)]
         output=self.root/"resume.json"; calls=[]
-        def generate(model,tokenizer,question,budget):
+        def generate(model,tokenizer,questions,budget):
+            question,=questions
             calls.append(question)
             if len(calls)==2:
                 records=[json.loads(x) for x in output.with_suffix(".progress.jsonl").read_text().splitlines()]
                 self.assertEqual(len(records),1)
                 self.assertIn(records[0]["question"],output.with_suffix(".md").read_text())
                 raise Interrupted("during second question")
-            return trace(question.rsplit(" ",1)[-1]),3,False
-        with patch.object(evaluation,"generate_answer",side_effect=generate),self.assertRaises(Interrupted):
-            self.evaluate(original=True,output=output)
-        first=output.with_suffix(".progress.jsonl").read_bytes()
+            return [(trace(question.rsplit(" ",1)[-1]),3,False)]
+        with patch.object(evaluation,"generate_answers",side_effect=generate),self.assertRaises(Interrupted):
+            self.evaluate(original=True,output=output,batch_size=1)
+        progress_path=output.with_suffix(".progress.jsonl")
+        old=json.loads(progress_path.read_text())
+        del old["generation_batch_size"]
+        progress_path.write_text(json.dumps(old)+"\n")
+        first=progress_path.read_bytes()
         output.with_suffix(".md").unlink()
-        with patch.object(evaluation,"generate_answer",return_value=("invalid",4,True)) as called:
+        def invalid(model,tokenizer,questions,budget):
+            return [("invalid",4,True)]*len(questions)
+        with patch.object(evaluation,"generate_answers",side_effect=invalid) as called:
             report=self.evaluate(original=True,output=output)
-        self.assertEqual(called.call_count,1)
-        self.assertTrue(output.with_suffix(".progress.jsonl").read_bytes().startswith(first))
-        self.assertEqual(report["metrics"]["answer_accuracy"],.5)
-        self.assertEqual(report["metrics"]["generation_truncation_rate"],.5)
-        self.assertEqual(output.with_suffix(".md").read_text().count("## Question "),2)
-        with patch.object(evaluation,"generate_answer",side_effect=AssertionError("already complete")):
+        self.assertEqual([len(call.args[2]) for call in called.call_args_list],[4,1])
+        self.assertEqual([question for call in called.call_args_list for question in call.args[2]],
+                         [self.raw[i]["problem"] for i in report["data"]["indices"][1:]])
+        self.assertTrue(progress_path.read_bytes().startswith(first))
+        self.assertEqual(report["metrics"]["answer_accuracy"],1/6)
+        self.assertEqual(report["metrics"]["generation_truncation_rate"],5/6)
+        self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],[1,4,4,4,4,1])
+        self.assertEqual(output.with_suffix(".md").read_text().count("## Question "),6)
+        with patch.object(evaluation,"generate_answers",side_effect=AssertionError("already complete")):
             again=self.evaluate(original=True,output=output)
         self.assertEqual(again["predictions"],report["predictions"])
-        self.assertIn("2/2 completed",self.eval_terminal)
+        self.assertIn("6/6 completed",self.eval_terminal)
 
     def test_all_outcomes_and_summary_failure_reuse_saved_records(self):
         self.raw=[raw_row(i) for i in range(40)]
@@ -408,9 +423,9 @@ class InstructSFTTests(unittest.TestCase):
         original_write=Path.write_text
         answers=[(trace(i),4,False) for i in range(4)]
         answers[1]=(trace(999),4,False);answers[2]=("invalid",4,False);answers[3]=(trace(3),4,True)
-        with patch.object(evaluation,"generate_answer",side_effect=answers),patch.object(Path,"write_text",new=fail_summary),self.assertRaises(SystemExit):
+        with patch.object(evaluation,"generate_answers",return_value=answers),patch.object(Path,"write_text",new=fail_summary),self.assertRaises(SystemExit):
             self.evaluate(original=True,output=output)
-        with patch.object(evaluation,"generate_answer",side_effect=AssertionError("must reuse")):
+        with patch.object(evaluation,"generate_answers",side_effect=AssertionError("must reuse")):
             report=self.evaluate(original=True,output=output)
         self.assertEqual(report["metrics"]["generation_samples"],4)
         self.assertEqual(report["metrics"]["answer_format_rate"],.75)
@@ -448,6 +463,61 @@ class InstructSFTTests(unittest.TestCase):
             self.assertTrue(called.call_args.kwargs["use_cache"])
             self.assertTrue(model.training);self.assertFalse(model.config.use_cache)
         with self.assertRaisesRegex(ValueError,"exceed"):sample.generate_answer(model,self.tokenizer,"question",256)
+
+    def test_batch_generation_keeps_each_prompt_and_its_first_eos(self):
+        model = self.loader(self.base, local_files_only=True)
+        model.train()
+        model.config.use_cache = False
+        eos, pad = self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+        questions = ["question 1", "question 2 2", "question 3 3 3", "question 4 4 4 4"]
+        sequences = [[15, eos], [16, 17, eos], [18, 19, 20, 21], [22, 23, 24, eos]]
+        original_generate = model.generate
+
+        class ForceSequences(LogitsProcessor):
+            def __init__(self, prompt_width):
+                self.prompt_width = prompt_width
+
+            def __call__(self, inputs, scores):
+                step = inputs.shape[-1] - self.prompt_width
+                scores.fill_(-torch.inf)
+                for row, sequence in enumerate(sequences):
+                    scores[row, sequence[step] if step < len(sequence) else eos] = 0
+                return scores
+
+        def forced(**kwargs):
+            width = kwargs["input_ids"].shape[-1]
+            return original_generate(**kwargs, logits_processor=[ForceSequences(width)])
+
+        padding_side = self.tokenizer.padding_side
+        with patch.object(model, "generate", side_effect=forced) as called:
+            outputs = sample.generate_answers(model, self.tokenizer, questions, 4)
+        called.assert_called_once()
+        inputs = called.call_args.kwargs
+        for question, row, mask in zip(questions, inputs["input_ids"], inputs["attention_mask"], strict=True):
+            expected = self.tokenizer.encode(data.build_prompt(self.tokenizer, question), add_special_tokens=False)
+            self.assertEqual(row.tolist(), [pad] * (len(row) - len(expected)) + expected)
+            self.assertEqual(row[mask.bool()].tolist(), expected)
+        self.assertEqual(outputs, [(self.tokenizer.decode(seq, skip_special_tokens=True), len(seq), eos not in seq)
+                                   for seq in sequences])
+        self.assertEqual(self.tokenizer.padding_side, padding_side)
+        self.assertTrue(model.training)
+        self.assertFalse(model.config.use_cache)
+
+    def test_batch_timing_and_actual_tail_batch_size(self):
+        self.raw = [raw_row(i) for i in range(50)]
+
+        def generate(model, tokenizer, questions, budget):
+            return [(trace(question.rsplit(" ", 1)[-1]), 4, False) for question in questions]
+
+        with patch.object(evaluation, "generate_answers", side_effect=generate) as called, \
+                patch.object(evaluation, "time") as clock:
+            clock.perf_counter.side_effect = [0, 8, 8, 9, 9, 11, 11, 14, 14, 18, 18, 21, 21, 26]
+            report = self.evaluate(original=True)
+        self.assertEqual([len(call.args[2]) for call in called.call_args_list], [4, 1])
+        self.assertEqual([row["generation_runtime"] for row in report["predictions"]], [3, 4, 5, 6, 8])
+        self.assertEqual([row["generation_batch_size"] for row in report["predictions"]], [4, 4, 4, 4, 1])
+        self.assertEqual(report["metrics"]["generation_runtime"], 26)
+        self.assertEqual(report["metrics"]["generation_samples_per_second"], 5 / 26)
 
     def test_interruption_skips_evaluation_and_failed_final_evaluation_is_retryable(self):
         with patch.object(train_sft,"evaluate_checkpoint") as called,self.assertRaises(Interrupted):
@@ -513,7 +583,7 @@ class InstructSFTTests(unittest.TestCase):
         ds,info=self.prepared()
         model=self.model_loader(self.model_name,dtype=torch.float32)
         with patch.object(evaluation,"__file__",str(self.root/"evaluate_checkpoint.py")), \
-                patch.object(evaluation,"generate_answer",return_value=(trace(1),4,False)),contextlib.redirect_stdout(io.StringIO()):
+                patch.object(evaluation,"generate_answers",return_value=[(trace(1),4,False)]*2),contextlib.redirect_stdout(io.StringIO()):
             report=evaluation.evaluate_checkpoint(model_name=self.model_name,model=model,tokenizer=self.tokenizer,
                 dataset=ds,data_info=info,config=self.config,device="cpu",disable_tqdm=True)
         output=self.root/"outputs/evaluations/original-Qwen3-4B-Instruct-2507-OpenR1-Math-220k-default-train-n2.json"
@@ -533,6 +603,8 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(len(set(paths)),4)
         for count in (0,-1,3):
             with self.assertRaises(SystemExit):self.evaluate(original=True,count=count)
+        for batch_size in (0,-1,"1.5"):
+            with self.assertRaises(SystemExit):self.evaluate(original=True,batch_size=batch_size)
 
 
 if __name__ == "__main__":

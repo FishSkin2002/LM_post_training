@@ -16,8 +16,10 @@ from prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer, model_dty
                               require_model, text_format, validate_precision)
 from math_scoring import SCORING, score_answer
 from math_data import dataset_label
-from sample_checkpoint import generate_answer
+from sample_checkpoint import generate_answers
 from training_workflow import data_plan, format_metrics, read_source
+
+DEFAULT_BATCH_SIZE = 4
 
 
 def answer_metrics(results):
@@ -35,8 +37,8 @@ def readable_prediction(position, prediction):
         f"## Question {position + 1} (dataset index {prediction['index']})\n\n"
         f"Correct: {prediction['correct']} | Format valid: {prediction['format_valid']} | "
         f"Truncated: {prediction['truncated']}\n\n"
-        f"Generated tokens: {prediction['generated_tokens']} | "
-        f"Generation time: {prediction['generation_runtime']:.3f} s\n\n"
+        f"Generated tokens: {prediction['generated_tokens']} | Batch size: {prediction['generation_batch_size']} | "
+        f"Generation time share: {prediction['generation_runtime']:.3f} s\n\n"
         f"### Question\n\n{indent(prediction['question'], '    ')}\n\n"
         f"### Reference answer\n\n{indent(prediction['reference_answer'], '    ')}\n\n"
         f"### Reference final answer\n\n{indent(prediction['reference_final_answer'], '    ')}\n\n"
@@ -46,7 +48,9 @@ def readable_prediction(position, prediction):
 
 def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, output=None, device=None,
                         model=None, tokenizer=None, dataset=None, data_info=None, config=None, disable_tqdm=False,
-                        sft_source=None):
+                        sft_source=None, batch_size=DEFAULT_BATCH_SIZE):
+    if type(batch_size) is not int or batch_size < 1:
+        raise ValueError("batch-size must be a positive integer.")
     if (checkpoint is None) == (model_name is None):
         raise ValueError("Specify exactly one of checkpoint or model-name.")
     if sft_source is not None and (checkpoint is not None or config is not None):
@@ -105,7 +109,10 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     if progress_path.is_file():
         with progress_path.open(encoding="utf-8") as saved:
             predictions = [json.loads(line) for line in saved]
+        for prediction in predictions:
+            prediction.setdefault("generation_batch_size", 1)
     print(f"Generation progress: {len(predictions)}/{len(rows)} completed; {progress_path}", flush=True)
+    print(f"Generation batch size: {batch_size}", flush=True)
     print(f"Readable answers: {readable_path}", flush=True)
     if model is None:
         model = AutoModelForCausalLM.from_pretrained(
@@ -128,25 +135,30 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
             for position, prediction in enumerate(predictions):
                 readable.write(readable_prediction(position, prediction))
             readable.flush()
-            for position in range(len(predictions), len(rows)):
-                row = rows[position]
-                index = indices[position]
+            for start in range(len(predictions), len(rows), batch_size):
+                batch = rows.select(range(start, min(start + batch_size, len(rows))))
+                actual_batch_size = len(batch)
                 started = time.perf_counter()
-                text, count, truncated = generate_answer(model, tokenizer, row["question"], config["max_new_tokens"])
-                correct, valid, truncated = score_answer(text, row["final_answer"], truncated)
-                prediction = {"index": index, "question": row["question"],
-                              "source_index": row["source_index"], "generation_index": row["generation_index"],
-                              "reference_answer": row["answer"], "reference_final_answer": row["final_answer"],
-                              "answer": text,
-                              "generated_tokens": count, "correct": correct,
-                              "format_valid": valid, "truncated": truncated,
-                              "generation_runtime": time.perf_counter() - started}
-                saved.write(json.dumps(prediction, ensure_ascii=False) + "\n")
-                saved.flush()
-                readable.write(readable_prediction(position, prediction))
-                readable.flush()
-                predictions.append(prediction)
-                progress.update(1)
+                answers = generate_answers(model, tokenizer, batch["question"], config["max_new_tokens"])
+                time_share = (time.perf_counter() - started) / actual_batch_size
+                for position, (row, answer) in enumerate(zip(batch, answers, strict=True), start=start):
+                    text, count, truncated = answer
+                    started = time.perf_counter()
+                    correct, valid, truncated = score_answer(text, row["final_answer"], truncated)
+                    score_time = time.perf_counter() - started
+                    prediction = {"index": indices[position], "question": row["question"],
+                                  "source_index": row["source_index"], "generation_index": row["generation_index"],
+                                  "reference_answer": row["answer"], "reference_final_answer": row["final_answer"],
+                                  "answer": text, "generated_tokens": count, "correct": correct,
+                                  "format_valid": valid, "truncated": truncated,
+                                  "generation_batch_size": actual_batch_size,
+                                  "generation_runtime": time_share + score_time}
+                    saved.write(json.dumps(prediction, ensure_ascii=False) + "\n")
+                    saved.flush()
+                    readable.write(readable_prediction(position, prediction))
+                    readable.flush()
+                    predictions.append(prediction)
+                    progress.update(1)
     finally:
         model.train(was_training)
     results = [(row["correct"], row["format_valid"], row["truncated"]) for row in predictions]
@@ -161,7 +173,7 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                  "fingerprint": plan["fingerprint"], "split_seed": plan["split_seed"]},
         "text_format": text_format(tokenizer), "precision": "bf16" if config.get("bf16") else "fp32",
         "generation": {"do_sample": False, "max_new_tokens": config["max_new_tokens"],
-                       "eos_token_id": tokenizer.eos_token_id},
+                       "eos_token_id": tokenizer.eos_token_id, "batch_size": batch_size},
         "scoring": SCORING,
         "metrics": metrics, "predictions": predictions,
     }
@@ -182,6 +194,8 @@ def main():
     evaluation_source.add_argument("--sft-source", type=Path,
                                    help="Anchor original-model evaluation to the exact held-out split of an SFT artifact.")
     parser.add_argument("--num-samples", type=int, help="Evaluate the first N validation questions; default: all.")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+                        help="Maximum questions per generation batch (default: %(default)s).")
     parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
     args = parser.parse_args()
@@ -189,7 +203,7 @@ def main():
         evaluate_checkpoint(args.checkpoint, model_name=args.model_name, num_samples=args.num_samples,
                             output=args.output, device=args.device,
                             config=load_config(args.config) if args.checkpoint is None and args.config else None,
-                            sft_source=args.sft_source)
+                            sft_source=args.sft_source, batch_size=args.batch_size)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 

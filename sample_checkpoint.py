@@ -18,24 +18,38 @@ from math_data import dataset_label
 
 
 @torch.inference_mode()
-def generate_answer(model, tokenizer, question, max_new_tokens):
-    inputs = tokenizer(build_prompt(tokenizer, question), add_special_tokens=False, return_tensors="pt").to(model.device)
-    if inputs["input_ids"].shape[-1] + max_new_tokens > model.config.max_position_embeddings:
+def generate_answers(model, tokenizer, questions, max_new_tokens):
+    prompts = [build_prompt(tokenizer, question) for question in questions]
+    inputs = tokenizer(prompts, padding=True, padding_side="left", add_special_tokens=False,
+                       return_tensors="pt").to(model.device)
+    prompt_width = inputs["input_ids"].shape[-1]
+    if prompt_width + max_new_tokens > model.config.max_position_embeddings:
         raise ValueError("Question and output budget exceed the model context; reduce max-new-tokens.")
+    eos = tokenizer.eos_token_id
     was_training, use_cache = model.training, model.config.use_cache
     model.eval()
     try:
         model.config.use_cache = True
         with torch.autocast(model.device.type, dtype=torch.bfloat16, enabled=model.dtype == torch.bfloat16):
-            output = model.generate(
+            outputs = model.generate(
                 **inputs, max_new_tokens=max_new_tokens, do_sample=False, use_cache=True,
-                eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id,
-            )[0, inputs["input_ids"].shape[-1]:].tolist()
+                eos_token_id=eos, pad_token_id=tokenizer.pad_token_id,
+            )[:, prompt_width:].tolist()
     finally:
         model.config.use_cache = use_cache
         model.train(was_training)
-    truncated = len(output) >= max_new_tokens and output[-1] != tokenizer.eos_token_id
-    return tokenizer.decode(output, skip_special_tokens=True), len(output), truncated
+    answers = []
+    for output in outputs:
+        finished = eos in output
+        if finished:
+            output = output[:output.index(eos) + 1]
+        truncated = not finished and len(output) >= max_new_tokens
+        answers.append((tokenizer.decode(output, skip_special_tokens=True), len(output), truncated))
+    return answers
+
+
+def generate_answer(model, tokenizer, question, max_new_tokens):
+    return generate_answers(model, tokenizer, [question], max_new_tokens)[0]
 
 
 def main():
