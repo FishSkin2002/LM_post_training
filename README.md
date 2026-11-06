@@ -255,8 +255,8 @@ python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 | `--config` | `configs/training/sft.yaml` | 设置评测数据与生成预算。 |
 | `--sft-source` | 使用配置确定的划分 | 指向 SFT `final/`，使用其保存的评测配置与划分；与 `--config` 互斥。 |
 | `--num-samples` | 完整验证集 | 评测固定顺序的前 N 题，须为不超过验证集大小的正整数。 |
-| `--batch-size` | `4` | 每批最大题数；自适应模式下为起始题数，须为正整数。 |
-| `--auto-batch-size` | 固定批大小 | 成功时增大批次，生成失败后缩小重试。 |
+| `--batch-size` | vLLM：`64`；Transformers：`4` | 每次提交的最大题数，须为正整数；Transformers 自适应模式下为起始题数。 |
+| `--auto-batch-size` | 固定批大小 | 仅限 Transformers：成功时增大批次，生成失败后缩小重试；与 vLLM 同用会报错。 |
 | `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足配置的精度要求。 |
 | `--output` | `outputs/evaluations/` 下自动命名 | 指定报告 JSON 路径，同名保存逐题进度和阅读版。 |
 | `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
@@ -274,8 +274,8 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/final
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
 | `--num-samples` | 完整验证集 | 评测固定顺序的前 N 题，须为不超过验证集大小的正整数。 |
-| `--batch-size` | `4` | 每批最大题数；自适应模式下为起始题数，须为正整数。 |
-| `--auto-batch-size` | 固定批大小 | 成功时增大批次，生成失败后缩小重试。 |
+| `--batch-size` | vLLM：`64`；Transformers：`4` | 每次提交的最大题数，须为正整数；Transformers 自适应模式下为起始题数。 |
+| `--auto-batch-size` | 固定批大小 | 仅限 Transformers：成功时增大批次，生成失败后缩小重试；与 vLLM 同用会报错。 |
 | `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足来源精度要求。 |
 | `--output` | 运行目录的 `evaluations/` 下自动命名 | 指定报告 JSON 路径，同名保存逐题进度和阅读版。 |
 | `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
