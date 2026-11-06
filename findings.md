@@ -1,5 +1,15 @@
 # 当前实现发现
 
+## 兼容环境渠道与 CUDA 数据处理（2026-11-06）
+
+- 用户已明确要求自动创建兼容环境沿用其现有 Conda 渠道配置；这覆盖此前内部创建命令强制使用 conda-forge 的实现选择。
+- legacy/sft_data/migration.py 在 Conda 创建阶段指定 --override-channels -c conda-forge，创建后才使用兼容环境的 python -m pip install --isolated 安装固定 CPU 数据依赖。主训练环境与该兼容环境分开。
+- worker.export_data 调用 load_tokenizer、prepare_dataset、data_plan 和 save_prepared_sft_data。prepare_dataset 的结果是 Python 列表及 Arrow 数据集，分词和筛选中没有 CUDA 张量转移或模型前向；继续核对各阶段的具体实现和官方设备语义。
+- 已核对完整数据链：math_data 使用 Python 字符串、哈希和 Math-Verify 解析；prepare_sft_data 使用 fast tokenizer 返回 Python IDs 列表，随后由 datasets/Arrow map、filter、排序及计数；data_plan 用 Python 按题分组和固定种子划分，prepared_sft_data 保存 Arrow 与 JSON。该链没有需要 PyTorch CUDA 执行的数值计算。
+- 官方依据：PyTorch 2.8 CUDA 语义要求在 CUDA 设备上分配或转移张量后才执行对应 GPU 运算（https://docs.pytorch.org/docs/2.8/notes/cuda.html）；Hugging Face Tokenizers 说明其 Rust 实现及服务器 CPU 分词（https://huggingface.co/docs/tokenizers/index）；Datasets 的 GPU map 示例需用户显式将模型/张量放到设备（https://huggingface.co/docs/datasets/process）。仅安装 CUDA 版 PyTorch 不会把当前文本处理代码迁到 GPU。
+- 执行核查：/tmp/qwen-legacy-channel-cuda-audit.py 在 torch 2.8.0+cu128 中对 20 条合成记录执行相同 prepare_dataset、data_plan 和缓存保存/读取；TorchDispatch 运算数为 0，CUDA 初始化和转移调用均为 0，完整记录和划分一致。另通过实际 ensure_compatibility_environment 函数核实新创建命令不覆盖 Conda 渠道、后续仍调用 pip。没有在用户 A800 上做 CPU/CUDA 版本计时。
+- 结论：当前兼容数据准备保留 CPU PyTorch；主训练和 vLLM 的 CUDA 环境独立使用。若后续优化准备速度，应先测文本解析、逐条 map、批量分词和磁盘读写，而非更换 CUDA wheel；此轮不实施这些后续优化。
+
 ## 批次策略实现调查（2026-11-06）
 
 - PR58 已合入 main/a87d28a；本轮从该点实现，前一节的默认 4/共用自适应描述为此前代码事实。
