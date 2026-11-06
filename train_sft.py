@@ -14,6 +14,7 @@ from prepare_sft_data import CONFIG_DIR, load_config, load_tokenizer, model_dtyp
 from math_data import OPENR1
 from evaluate_checkpoint import evaluate_checkpoint
 from training_workflow import WorkflowTrainer, data_plan, new_run, read_source, reserve_directory, save_run
+from generation import add_generation_arguments, exec_final_evaluation, load_generation_config
 
 
 def load_training_model(config, source_path=None):
@@ -39,8 +40,10 @@ def main():
     source.add_argument("--resume-from-checkpoint", type=Path, help="Restore an unfinished training checkpoint.")
     source.add_argument("--continue-from", type=Path, help="Start a new stage from a saved adapter.")
     parser.add_argument("--additional-epochs", type=float, help="Extra epochs in the new stage; requires --continue-from.")
+    add_generation_arguments(parser)
     args = parser.parse_args()
     config = load_config(args.config)
+    generation_settings = load_generation_config(args.generation_config, args.generation_backend)
     if bool(args.continue_from) != (args.additional_epochs is not None):
         parser.error("--continue-from and --additional-epochs must be provided together.")
     if args.additional_epochs is not None and (not math.isfinite(args.additional_epochs) or args.additional_epochs <= 0):
@@ -98,10 +101,14 @@ def main():
         tokenizer.save_pretrained(final_dir)
         trainer.save_state()
         print(f"Training complete. Saved adapter and tokenizer to {final_dir}", flush=True)
-        evaluate_checkpoint(final_dir, model=trainer.model, tokenizer=tokenizer, dataset=dataset,
-                            disable_tqdm=training_args.disable_tqdm)
+        if generation_settings["backend"] == "transformers":
+            evaluate_checkpoint(final_dir, model=trainer.model, tokenizer=tokenizer, dataset=dataset,
+                                disable_tqdm=training_args.disable_tqdm,
+                                generation_config=args.generation_config, generation_backend="transformers")
     finally:
         writer.close()
+    if generation_settings["backend"] == "vllm":
+        exec_final_evaluation(final_dir, args.generation_config, args.generation_backend)
 
 
 if __name__ == "__main__":

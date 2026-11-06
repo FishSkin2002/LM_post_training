@@ -175,7 +175,8 @@ class PostSFTTests(unittest.TestCase):
 
             def fixed_generate(*args, **kwargs):
                 if "generation_config" in kwargs:
-                    self.assertEqual(kwargs["generation_config"].eos_token_id, [self.tokenizer.eos_token_id])
+                    eos = kwargs["generation_config"].eos_token_id
+                    self.assertIn(eos, (self.tokenizer.eos_token_id, [self.tokenizer.eos_token_id]))
                     self.assertTrue(kwargs["generation_config"].use_cache)
                     kwargs["logits_processor"] = [FixedAnswers(self.tokenizer)]
                 return generate(*args, **kwargs)
@@ -192,7 +193,7 @@ class PostSFTTests(unittest.TestCase):
                     for question in (overlap, "new question 1", "new question 2", "new question 3")]
         else:
             cfg["max_prompt_length"] = 128
-            cfg["trainer"].update(max_completion_length=4, num_generations=2, gradient_accumulation_steps=2)
+            cfg["trainer"].update(use_vllm=False, max_completion_length=4, num_generations=2, gradient_accumulation_steps=2)
             rows = [skywork(question, ["2"]) for question in (overlap, "new question 1", "new question 2", "new question 3")]
         path.write_text(yaml.safe_dump(cfg))
         trainer_name = "PreferenceTrainer" if stage == "dpo" else "MathGRPOTrainer"

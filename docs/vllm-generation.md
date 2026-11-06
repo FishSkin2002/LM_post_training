@@ -61,3 +61,4 @@
 - [TRL 1.16.0 vLLM 集成](https://huggingface.co/docs/trl/v1.16.0/vllm_integration)：支持范围、模式及训练权重交接。
 - [vLLM 0.22.0 CUDA 依赖](https://raw.githubusercontent.com/vllm-project/vllm/v0.22.0/requirements/cuda.txt)与 [GPU 安装说明](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/)：PyTorch/CUDA 构建需要配套核对。
 - [vLLM LoRA 说明](https://docs.vllm.ai/en/stable/features/lora/)：独立推理可使用底座与适配器。
+- [TRL 0.27.2 GRPO 实现](https://github.com/huggingface/trl/blob/v0.27.2/trl/trainer/grpo_trainer.py)、[vLLM 0.10.2 发布资产](https://github.com/vllm-project/vllm/releases/expanded_assets/v0.10.2)及 [CUDA 12.8 驱动表](https://docs.nvidia.com/cuda/archive/12.8.0/cuda-toolkit-release-notes/index.html)：本次保守升级选择的依据。

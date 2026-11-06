@@ -32,6 +32,7 @@ import train_sft
 import training_workflow as workflow
 import sample_checkpoint as sample
 import evaluate_checkpoint as evaluation
+import generation
 
 # Official Qwen3-4B-Instruct-2507 template, revision cdbee75f17c01a7cc42f958dc650907174af0554.
 TEMPLATE = (Path(__file__).parent / "fixtures/qwen3-instruct-chat-template.jinja").read_text()
@@ -80,6 +81,11 @@ class InstructSFTTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        native_config = self.root / "generation.yaml"
+        native_config.write_text("backend: transformers\n")
+        backend_patch = patch.object(generation, "GENERATION_CONFIG", native_config)
+        backend_patch.start()
+        self.addCleanup(backend_patch.stop)
         self.base = self.root / "tiny-instruct"
         self.model_name = data.MODEL_NAME
         words = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "<unk>", "<think>", "</think>",
@@ -549,7 +555,7 @@ class InstructSFTTests(unittest.TestCase):
             self.assertIsNone(sys.exc_info()[0])
 
         with patch.object(evaluation, "generate_answers", side_effect=generate), \
-                patch.object(evaluation, "gc") as garbage:
+                patch.object(generation, "gc") as garbage:
             garbage.collect.side_effect = collect
             report = self.evaluate(original=True, batch_size=4, auto_batch_size=True)
         self.assertEqual([len(batch) for batch in attempts], [4, 8, 16, 8, 8, 4, 4, 1])
