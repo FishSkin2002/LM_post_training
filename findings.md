@@ -1,5 +1,13 @@
 # 当前实现发现
 
+## 按生成引擎区分评测批次（2026-11-06）
+
+- 目前 evaluate_checkpoint 的两个引擎共用默认 4 和成功翻倍/失败缩小逻辑；VLLMGenerator 将一个外部批次完整交给 LLM.generate，返回后评测才逐题保存。外部批次大小不等于引擎内部并发数。
+- 用户最新目标：vLLM 固定提交，默认 64，可显式调整；自适应仅供 Transformers。64 是起始设置，未做真实模型吞吐测量，不宣称最优。参数冲突提前报错，vLLM 失败后从已保存条数继续的边界保持。
+- vLLM 0.10.2 官方离线生成说明：引擎按内存限制安排给定提示的批处理。来源：https://docs.vllm.ai/en/v0.10.2/api/vllm/entrypoints/llm.html 。这说明无需借外层生成错误探测其并发上限，不等于任意外部块大小都达到相同吞吐。
+- 直接冲突的要求位于 docs/training-workflow.md 和 docs/vllm-generation.md；README 两处参数表在功能阶段同步，当前不提前描述未实现行为。GRPO 训练采样不属于本次评测批次调整。
+- PR57 已合入 main/1305f0f；本轮从该基点只交付独立要求。代码中的默认值与自适应行为仍是旧实现，不能将本轮文档目标当作已生效。
+
 ## PR57 代码整理范围（2026-11-06）
 
 - 用户明确 train.py 保留 CLI 与独立方法调度，evaluate_checkpoint.py 和 rescore_evaluation.py 整体包含自身流程；当前整理集中更新 PR57。
