@@ -31,13 +31,13 @@ def check_environment():
 
 def export_data(source, output):
     runtime = check_environment()
-    from migrate_sft import compatibility_profile
+    from legacy.sft_data.migration import compatibility_profile
     from prepare_sft_data import load_tokenizer, prepare_dataset
     from prepared_sft_data import save_prepared_sft_data
     from training_workflow import data_plan, read_source
     source, metadata, _ = read_source(source)
-    if metadata.get("stage", "sft") != "sft" or source.name != "final":
-        raise ValueError("Legacy export requires the original SFT final/ artifact.")
+    if metadata.get("stage", "sft") != "sft":
+        raise ValueError("Legacy export requires an SFT artifact.")
     compatibility_profile(metadata)
     tokenizer = load_tokenizer(source, local_files_only=True)
     dataset, info = prepare_dataset(metadata["config"], tokenizer)

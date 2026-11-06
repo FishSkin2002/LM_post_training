@@ -3,6 +3,7 @@
 import json
 from importlib.metadata import version
 from pathlib import Path
+import subprocess
 
 from datasets import load_from_disk
 
@@ -24,16 +25,24 @@ def resolve_prepared_sft_data(source, explicit=None, saved=None):
     return None
 
 
-def require_data_environment(metadata, source, prepared=None):
+def ensure_prepared_sft_data(source, metadata, explicit=None, saved=None):
+    """Reuse existing data, or prepare a known legacy source before continuing."""
+    prepared = resolve_prepared_sft_data(source, explicit, saved)
     if metadata is None or prepared is not None:
-        return
-    saved = metadata.get("data_environment")
+        return prepared
+    recorded = metadata.get("data_environment")
     # Unmarked artifacts were produced by the original datasets 5.1.0 stack.
-    compatible = saved == data_environment() if saved else version("datasets") == "5.1.0"
-    if not compatible:
-        final = Path(source).expanduser().resolve().parent / "final"
-        raise ValueError("This SFT artifact needs a one-time data migration. Run from the main environment: "
-                         f'python migrate_sft.py --sft-source "{final}"')
+    compatible = recorded == data_environment() if recorded else version("datasets") == "5.1.0"
+    if compatible:
+        return None
+    from legacy.sft_data.migration import migrate_sft
+    print(f"Preparing legacy SFT data automatically before continuing: {source}", flush=True)
+    try:
+        return migrate_sft(source)
+    except subprocess.SubprocessError as error:
+        detail = (getattr(error, "stderr", None) or str(error)).strip()[:2000]
+        raise ValueError(f"Automatic legacy SFT data preparation failed: {detail}. Resolve the error and rerun "
+                         "the same training/evaluation command; the original SFT artifact was preserved.") from error
 
 
 def tokenizer_backend(tokenizer):
@@ -78,4 +87,4 @@ def load_prepared_sft_data(path, config, tokenizer):
 
 def add_prepared_data_argument(parser):
     parser.add_argument("--prepared-sft-data", type=Path,
-                        help="Override the prepared SFT cache; default: discover prepared-sft/ next to the source final/.")
+                        help="Override prepared SFT data; default: reuse or automatically prepare it from the source.")

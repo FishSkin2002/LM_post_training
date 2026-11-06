@@ -9,23 +9,24 @@
 - 新SFT、兼容的主环境产物和已有有效缓存直接正常工作；有效缓存路径不查询Conda或调用旧Python。
 - 完整来源/划分/分词校验、权重和run记录保留、JSONL/Markdown按条数追加不变；旧配置、安装与数据失败仍明确报错。
 
-## 本轮边界
+## 当前实施
 
-按docs/git-workflow.md，修改已合入的项目要求必须先交付独立要求PR，用户合入后再实施。此轮只修改docs/automatic-sft-migration.md及docs/vllm-generation.md与本任务规划记录，不修改功能实现或README当前命令。
+PR #50已合入main/ebbe9ca。已从最新远程main创建codex/implicit-sft-migration，通过普通合并7215c05完整承接PR49/c406fc3，保留双方历史；三份规划冲突保留PR50最新决定。
 
-## Git与交付
-
-- 当前分支codex/implicit-sft-migration-requirements，从最新远程main（22fd7a5）创建。
-- 一次open列表确认PR49（codex/automatic-sft-migration）与PR33仍open；本轮不再查询，PR49暂缓合入，旧实现保持完整。
-- 之前vLLM和自动迁移代码在PR49，提交b53f9cf/6316a74/412710e/c406fc3；它目前仍要求独立迁移并管理自建前缀。
-- 保留未提交的docs/research/math-equivalence-and-sft-loss.md，排除本次提交。
+- prepared_sft_data.ensure_prepared_sft_data供原有四个入口调用，识别需要兼容的旧来源并自动准备，主环境新SFT/兼容来源/已有缓存均跳过旧环境。
+- 控制逻辑移入legacy/sft_data/migration.py，根migrate_sft.py删除。兼容环境标准conda create -n，再用Conda查询的Python/pip安装，位置服从envs_dirs；cache只放锁与状态。
+- worker接受旧SFT checkpoint和final，不依赖final存在。完整data_plan与缓存读取校验、原权重和run信息、JSONL/Markdown追加规则保留。
+- README去掉独立迁移命令和compat-root，原命令无需增加启用开关。
 
 | 步骤 | 状态 | 完成条件 |
 | --- | --- | --- |
-| 核对现状 | complete | 区分/tmp仅验收路径、默认cache前缀与用户新要求；核对PR49仍open。 |
-| 修订要求 | complete | 原有脚本自动触发、标准Conda命名环境、缓存直接复用；保留数据与生成协议。 |
-| 验证与提交 | complete | 文档无矛盾、diff检查通过，提交推送独立要求PR。 |
-| 功能修订 | pending | 用户合入要求后，从最新远程main新建功能分支，承接PR49历史后修改并验证。 |
+| 承接历史 | complete | 最新main新分支，普通合并PR49代码和历史。 |
+| 原入口自动调用 | complete | 新SFT/兼容来源/缓存正常路径，旧来源首次准备后继续原任务。 |
+| 标准Conda环境 | complete | -n创建、Conda查询解释器、pip安装，标记/锁/恢复/用户环境保护。 |
+| 针对性验证 | complete | 20迁移边界检查+45微型检查；实际原评测入口创建全新命名环境、准备旧数据并生成。 |
+| 文档与交付 | in_progress | README和规划更新、差异检查，提交推送新功能PR。 |
+
+未提交docs/research/math-equivalence-and-sft-loss.md继续保留并排除提交。本轮不跑真实4B训练、全量数据处理或付费API。
 
 ## 历史
 
@@ -33,4 +34,4 @@
 
 ## 本轮交付
 
-要求PR #50：https://github.com/FishSkin2002/LM_post_training/pull/50。文档检查通过，代码尚未修订；等待用户合入要求，再承接PR49实施新方案。
+功能开发和验收完成，待提交推送新功能PR。PR49的代码和历史已经承接，新PR将包含完整vLLM功能及按PR50修正后的入口流程；PR的合并或关闭仍由用户操作。

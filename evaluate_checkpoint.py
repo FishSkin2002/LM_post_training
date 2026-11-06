@@ -16,8 +16,7 @@ from math_scoring import SCORING, score_answer
 from math_data import dataset_label
 from sample_checkpoint import generate_answers
 from generation import add_generation_arguments, create_generator, load_generation_config
-from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
-                               require_data_environment, resolve_prepared_sft_data)
+from prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 from training_workflow import data_plan, format_metrics, read_source
 
 DEFAULT_BATCH_SIZE = 4
@@ -86,10 +85,9 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         raise ValueError("Source tokenizer template differs.")
     source_type = "lora" if checkpoint is not None else "original"
     data_source = sft_source or checkpoint
-    prepared_sft_data = resolve_prepared_sft_data(data_source, prepared_sft_data,
-                                                  metadata.get("prepared_sft_data") if metadata else None)
     if dataset is None:
-        require_data_environment(metadata, data_source, prepared_sft_data)
+        prepared_sft_data = ensure_prepared_sft_data(data_source, metadata, prepared_sft_data,
+                                                    metadata.get("prepared_sft_data") if metadata else None)
         dataset, data_info = (load_prepared_sft_data(prepared_sft_data, config, tokenizer) if prepared_sft_data
                               else prepare_dataset(config, tokenizer))
     elif data_info is None and metadata is not None:

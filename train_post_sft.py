@@ -26,8 +26,7 @@ from training_workflow import (TerminalPrinterCallback, TerminalProgressCallback
                                read_source, reserve_directory, save_run)
 from generation import (add_generation_arguments, exec_final_evaluation, load_generation_config,
                         package_version)
-from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
-                               require_data_environment, resolve_prepared_sft_data)
+from prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 
 
 class PostSFTTrainer:
@@ -168,8 +167,7 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None,
             args.vllm_max_model_length = required_context
         if args.vllm_max_model_length < required_context:
             raise ValueError("vllm_max_model_length cannot be smaller than prompt plus completion budgets.")
-    prepared_sft_data = resolve_prepared_sft_data(sft_source, prepared_sft_data, sft.get("prepared_sft_data"))
-    require_data_environment(sft, sft_source, prepared_sft_data)
+    prepared_sft_data = ensure_prepared_sft_data(sft_source, sft, prepared_sft_data, sft.get("prepared_sft_data"))
     sft_data, sft_info = (load_prepared_sft_data(prepared_sft_data, sft_config, tokenizer) if prepared_sft_data
                          else prepare_dataset(sft_config, tokenizer))
     plan = data_plan(sft_data, sft, sft_info)

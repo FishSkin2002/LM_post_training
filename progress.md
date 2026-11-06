@@ -1,19 +1,24 @@
 # 当前进展
 
-## 2026-11-06：修正入口和兼容环境创建方式
+## 2026-11-06：现有入口自动准备与标准Conda环境已实现
 
-用户明确继续使用原有训练/评测脚本，首次旧数据兼容处理由原入口自动完成；不额外运行migrate_sft.py。兼容环境改用标准Conda命名环境，随后由该环境Python执行pip安装。
+用户确认PR50已合入。受控入口从最新main/ebbe9ca创建codex/implicit-sft-migration，普通合并7215c05承接PR49/c406fc3完整历史；规划文件冲突保留最新要求，受控入口不能完成冲突后的merge，已获一次性正式宿主审批完成普通merge提交。
 
-已核对PR49实际实现：/tmp只用于验收时显式传入的compat-root；生产默认是用户缓存目录下的自建Conda前缀。两者都将按新要求改为Conda管理的命名环境。
+- 原train_sft、train_post_sft、evaluate_checkpoint、sample_checkpoint入口通过统一helper自动准备旧SFT数据，无需额外命令或开关。新SFT、当前数据环境兼容的来源与已有缓存跳过旧环境；DPO/GRPO及原始模型对照追溯原SFT。
+- 根migrate_sft.py已删除，控制模块在legacy/sft_data/migration.py。Conda标准命名环境创建，再用Conda查询的实际Python/pip安装CPU依赖；envs_dirs不被覆盖。用户缓存仅存状态/锁，不安装环境。并发锁、ready标记、安装中断重试和未受管环境保护保留。
+- 旧SFT checkpoint直接准备，不要求final存在。数据完整来源/指纹/token/划分核对后才原子发布缓存；原权重/run和历史JSONL/Markdown保持既有行为。
+- README已改为主安装与原命令使用说明，去掉独立迁移与--compat-root步骤。
 
-受控入口从最新远程main/22fd7a5创建codex/implicit-sft-migration-requirements。一次open列表显示PR49与PR33仍open；本轮不修改、关闭或合并这些PR。已在commentary说明PR49暂缓合入。
+验证：
+- tools.test_sft_migration：20项通过，覆盖所有原入口首次准备、新SFT/当前来源跳过、缓存复用、旧checkpoint、来源不符、子进程失败、命名环境安装中断、双层并发与未受管环境拒改。
+- tools.test_generation + tools.test_instruct_sft + tools.test_post_sft：45项微型检查通过，未运行真实4B训练。
+- 真实首次验收由evaluate_checkpoint.main正常命令触发：自动conda create -n建立此前不存在的qwen-sft-data-instruct-datasets51-cpu-v1-1e87c5bc6256，实际位于/home/yunli/miniconda3/envs/下；pip安装与check通过，torch2.6.0+cpu、CUDA runtime=None。
+- 随后CPU worker实际处理合成20题旧数据并核对，普通评测入口继续加载随机微型底座与旧LoRA并生成1条回答。仅原数据读取和底座规模使用测试替代，Conda/pip/处理/校验/生成真实执行。
+- 指纹仍为4e255131893486f9，验证索引[19,5]；全部题目、监督/参考、来源/组、token IDs/labels逐条相等；SFT产物字节未变。完成续跑在禁止Conda/旧子进程/生成器/评分器的检查下通过，JSONL与Markdown字节未变。
+- 日志/tmp/qwen-named-migration-smoke.log；结果/tmp/qwen-named-migration-fixture/migration-result.json；/tmp仅存合成测试数据和日志，兼容环境不在/tmp。
 
-本轮只修订两份要求文档：现有入口默认自动准备、标准Conda命名环境、新SFT与缓存复用路径、恢复和验收条件。完整数据核对、原产物保留、现有JSONL/Markdown续跑规则不变。已确认边界直接记录，没有重复向用户提方案问题。
+功能PR待提交。未更改主环境、系统Toolkit或真实SFT产物；未调用付费API。此前独立入口方案仅为PR49旧实现，当前已被本轮流程替换。
 
-要求修正已提交7b0018b并推送，PR #50：https://github.com/FishSkin2002/LM_post_training/pull/50；文档交叉核对与git diff --check通过。功能代码尚未按新要求修改；按Git约定，待用户合入要求后从最新远程main新建功能分支实施。
+## 历史
 
-## 已有功能证据
-
-PR49中的先前实现完成主vLLM依赖、公共生成与GRPO集成、CPU兼容环境首迁、来源/划分/token核对及缓存复用。微型检查与真实新CPU环境验收已通过，但当时验证的是独立入口和自建prefix方案，不能作为本轮命名环境和原入口自动调用的验收。
-
-旧训练环境、主环境和SFT产物本轮均未更改。未执行模型训练、数据处理或依赖安装。旧详细记录保存在已有Git提交及PR49的归档中。
+PR48确立主vLLM依赖和CPU兼容处理；PR49完成基础实现与GPU微型验证但入口和环境位置需修正；PR50已合入这次明确的新要求。旧详细记录保存在已有Git历史与docs/planning-archive/2026-11-06-pre-migration/。

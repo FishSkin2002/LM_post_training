@@ -14,8 +14,7 @@ from prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer,
 from training_workflow import read_source
 from math_data import dataset_label
 from generation import (add_generation_arguments, create_generator, generate_answers, load_generation_config)
-from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
-                               require_data_environment, resolve_prepared_sft_data)
+from prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 
 
 def generate_answer(model, tokenizer, question, max_new_tokens):
@@ -66,8 +65,7 @@ def main():
         tokenizer = load_tokenizer(args.checkpoint or model_name, local_files_only=local_only)
         if metadata and text_format(tokenizer) != metadata["text_format"]:
             raise ValueError("Source tokenizer template differs.")
-        args.prepared_sft_data = resolve_prepared_sft_data(data_source, args.prepared_sft_data)
-        require_data_environment(metadata, data_source, args.prepared_sft_data)
+        args.prepared_sft_data = ensure_prepared_sft_data(data_source, metadata, args.prepared_sft_data)
         dataset, info = (load_prepared_sft_data(args.prepared_sft_data, config, tokenizer) if args.prepared_sft_data
                          else prepare_dataset(config, tokenizer))
         if metadata:

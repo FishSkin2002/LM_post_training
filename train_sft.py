@@ -15,8 +15,7 @@ from math_data import OPENR1
 from evaluate_checkpoint import evaluate_checkpoint
 from training_workflow import WorkflowTrainer, data_plan, new_run, read_source, reserve_directory, save_run
 from generation import add_generation_arguments, exec_final_evaluation, load_generation_config
-from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
-                               require_data_environment, resolve_prepared_sft_data)
+from prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 
 
 def load_training_model(config, source_path=None):
@@ -62,9 +61,8 @@ def main():
         device = "cpu" if config.get("use_cpu") else ("cuda" if torch.cuda.is_available() else "cpu")
         validate_precision(config, device)
         tokenizer = load_tokenizer(source_path or config["model_name"], local_files_only=bool(source_path))
-        prepared = resolve_prepared_sft_data(source_path, args.prepared_sft_data,
-                                             metadata.get("prepared_sft_data") if metadata else None)
-        require_data_environment(metadata, source_path, prepared)
+        prepared = ensure_prepared_sft_data(source_path, metadata, args.prepared_sft_data,
+                                            metadata.get("prepared_sft_data") if metadata else None)
         dataset, data_info = (load_prepared_sft_data(prepared, config, tokenizer) if prepared
                               else prepare_dataset(config, tokenizer))
         plan = data_plan(dataset, metadata, data_info)

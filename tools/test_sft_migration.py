@@ -1,6 +1,7 @@
 """Migration failure boundaries and automatic cache reuse; no package downloads."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import shutil
@@ -16,9 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from peft import LoraConfig, get_peft_model
 
 import evaluate_checkpoint as evaluation
-import migrate_sft as migration
+from legacy.sft_data import migration
+import train_sft
+import sample_checkpoint
 import train_post_sft
-from prepared_sft_data import (load_prepared_sft_data, require_data_environment,
+from prepared_sft_data import (load_prepared_sft_data, ensure_prepared_sft_data,
                                resolve_prepared_sft_data, save_prepared_sft_data)
 from training_workflow import data_plan, new_run, save_run
 from tools import test_instruct_sft as fixtures
@@ -63,8 +66,9 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(original, {p.name: p.read_bytes() for p in self.source.iterdir() if p.is_file()})
 
     def test_ordinary_evaluation_and_original_control_discover_cache(self):
-        self.export(["--output", self.target])
-        with patch.object(evaluation, "prepare_dataset", side_effect=AssertionError("must use cache")), \
+        with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
+                patch.object(migration, "run_child", side_effect=self.export), \
+                patch.object(evaluation, "prepare_dataset", side_effect=AssertionError("must use cache")), \
                 patch.object(evaluation, "generate_answers", return_value=[("", 1, False)] * 2):
             for kwargs in ({"checkpoint": self.source},
                            {"model_name": self.fixture.model_name, "sft_source": self.source}):
@@ -74,13 +78,85 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(report["prepared_sft_data"], str(self.target))
                 self.assertEqual(report["data"]["indices"], self.metadata["data"]["validation_indices"])
 
-    def test_no_cache_guides_migration_without_installing(self):
-        with patch("prepared_sft_data.version", return_value="4.4.2"), \
-                self.assertRaisesRegex(ValueError, "python migrate_sft.py --sft-source"):
-            require_data_environment(self.metadata, self.source)
+    def test_missing_legacy_cache_automatically_prepares(self):
+        with patch.object(migration, "migrate_sft", return_value=self.target) as prepare:
+            self.assertEqual(ensure_prepared_sft_data(self.source, self.metadata), self.target)
+        prepare.assert_called_once_with(self.source)
         self.assertIsNone(resolve_prepared_sft_data(self.source))
         override = self.root / "external"
-        self.assertEqual(resolve_prepared_sft_data(self.source, override, "ignored"), override)
+        with patch.object(migration, "migrate_sft", side_effect=AssertionError("explicit overrides must be respected")):
+            self.assertEqual(ensure_prepared_sft_data(self.source, self.metadata, override), override)
+
+    def test_current_data_environment_and_new_sft_do_not_create_legacy_environment(self):
+        current = new_run(self.fixture.config, self.metadata["data"], 1)
+        with patch.object(migration, "find_conda", side_effect=AssertionError("no Conda for normal SFT")):
+            self.assertIsNone(ensure_prepared_sft_data(None, None))
+            self.assertIsNone(ensure_prepared_sft_data(self.source, current))
+
+    def test_automatic_preparation_reports_captured_failure_and_keeps_source(self):
+        original = (self.source / "run.json").read_bytes()
+        error = subprocess.CalledProcessError(1, "conda", stderr="Conda could not read its configuration")
+        with patch.object(migration, "migrate_sft", side_effect=error), \
+                self.assertRaisesRegex(ValueError, "Conda could not read its configuration"):
+            ensure_prepared_sft_data(self.source, self.metadata)
+        self.assertEqual((self.source / "run.json").read_bytes(), original)
+
+    def test_post_sft_training_automatically_prepares_on_first_use(self):
+        class PreparedHeldOut(Exception):
+            pass
+        expected = self.dataset.select(self.metadata["data"]["validation_indices"])["question"]
+        for stage in ("dpo", "grpo"):
+            source = self.root / stage / "source" / "final"
+            shutil.copytree(self.source, source)
+            with self.subTest(stage=stage), \
+                    patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
+                    patch.object(migration, "run_child", side_effect=self.export), \
+                    patch.object(train_post_sft, "load_stage_config", return_value=({"trainer": {}, "data": {}, "output_dir": "unused"}, 2048)), \
+                    patch.object(train_post_sft, "training_arguments", return_value=SimpleNamespace(use_vllm=False)), \
+                    patch.object(train_post_sft, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
+                    patch.object(train_post_sft, "prepare_post_training_data", side_effect=PreparedHeldOut) as prepare:
+                with self.assertRaises(PreparedHeldOut):
+                    train_post_sft.train(stage, "unused", sft_source=source)
+                self.assertEqual(prepare.call_args.args[3], expected)
+                self.assertTrue((source.parent / "prepared-sft" / "manifest.json").is_file())
+
+    def test_sft_continue_automatically_prepares_before_loading_weights(self):
+        class PreparedData(Exception):
+            pass
+        config = self.root / "sft.json"
+        config.write_text(json.dumps(self.fixture.config))
+        output = self.root / "continued"
+        argv = ["train_sft.py", "--config", str(config), "--continue-from", str(self.source),
+                "--additional-epochs", "1", "--output-dir", str(output)]
+        with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
+                patch.object(migration, "run_child", side_effect=self.export), \
+                patch.object(train_sft, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
+                patch.object(train_sft, "load_training_model", side_effect=PreparedData), patch.object(sys, "argv", argv):
+            with self.assertRaises(PreparedData):
+                train_sft.main()
+        self.assertEqual(json.loads((output / "run.json").read_text())["prepared_sft_data"], str(self.target))
+
+    def test_checkpoint_evaluation_prepares_without_requiring_final(self):
+        self.source = self.source.rename(self.source.with_name("checkpoint-7"))
+        with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
+                patch.object(migration, "run_child", side_effect=self.export), \
+                patch.object(evaluation, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
+                patch.object(evaluation, "generate_answers", return_value=[("", 1, False)] * 2):
+            report = evaluation.evaluate_checkpoint(self.source, model=self.fixture.model_loader(self.fixture.model_name),
+                device="cpu", generation_backend="transformers", disable_tqdm=True, output=self.root / "checkpoint.json")
+        self.assertEqual(report["prepared_sft_data"], str(self.target))
+
+    def test_sample_entry_automatically_prepares(self):
+        output = self.root / "samples.md"
+        engine = Mock(description={"backend": "transformers"}, initialization_runtime=0.0)
+        engine.generate.return_value = [("answer", 1, False)]
+        argv = ["sample_checkpoint.py", "--checkpoint", str(self.source), "--num-samples", "1", "--output", str(output)]
+        with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
+                patch.object(migration, "run_child", side_effect=self.export), \
+                patch.object(sample_checkpoint, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
+                patch.object(sample_checkpoint, "create_generator", return_value=engine), patch.object(sys, "argv", argv):
+            sample_checkpoint.main()
+        self.assertIn(str(self.target), output.read_text())
 
     def test_post_sft_training_and_evaluation_trace_original_sft_cache(self):
         self.export(["--output", self.target])
@@ -153,62 +229,77 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual([f.result(timeout=20) for f in futures], [self.target] * 2)
         calls.assert_called_once()
 
+    def fake_conda(self):
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        self.state_root = self.root / "state-cache"
+        self.envs = self.root / "configured-conda-envs"
+        info = {"root_prefix": str(self.root / "conda-root"), "envs_dirs": [str(self.envs)]}
+        stack.enter_context(patch.object(migration, "managed_root", return_value=self.state_root))
+        stack.enter_context(patch.object(migration, "find_conda", return_value="/conda"))
+        stack.enter_context(patch.object(migration, "conda_info", return_value=info))
+        def python(conda, name, prefix):
+            executable = prefix / "bin" / "python"
+            if not executable.is_file():
+                raise ValueError("Conda creation was interrupted")
+            return executable
+        stack.enter_context(patch.object(migration, "environment_python", side_effect=python))
+        return self.envs / migration.environment_name(self.profile)
+
+    def create_environment(self, command):
+        if "create" in command:
+            self.assertNotIn("--prefix", command)
+            name = command[command.index("-n") + 1]
+            python = self.envs / name / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.touch()
+
     def test_missing_conda_does_not_create_environment(self):
         with patch.object(migration.shutil, "which", return_value=None), \
                 patch.dict(migration.os.environ, {}, clear=True), \
                 self.assertRaisesRegex(ValueError, "Conda was not found"):
-            migration.ensure_compatibility_environment(self.profile, self.root / "managed")
-        self.assertFalse((self.root / "managed" / "environments").exists())
+            migration.ensure_compatibility_environment(self.profile)
 
     def test_installation_failure_is_not_ready_and_retry_reuses_python(self):
-        root = self.root / "managed"
-        prefix = root / "environments" / migration.compatibility_key(self.profile)
-        python = prefix / "bin" / "python"
+        prefix = self.fake_conda()
         def execute(command):
-            if "create" in command:
-                python.parent.mkdir(parents=True)
-                python.touch()
-            elif "install" in command:
+            self.create_environment(command)
+            if "install" in command:
                 raise subprocess.CalledProcessError(1, "pip")
-        with patch.object(migration, "find_conda", return_value="/conda"), \
-                patch.object(migration, "run_child", side_effect=execute), self.assertRaises(subprocess.CalledProcessError):
-            migration.ensure_compatibility_environment(self.profile, root)
+        with patch.object(migration, "run_child", side_effect=execute), self.assertRaises(subprocess.CalledProcessError):
+            migration.ensure_compatibility_environment(self.profile)
         self.assertFalse((prefix / "sft-data-ready.json").exists())
-        with patch.object(migration, "find_conda", return_value="/conda"), patch.object(migration, "run_child") as run:
-            self.assertEqual(migration.ensure_compatibility_environment(self.profile, root), python)
+        with patch.object(migration, "run_child") as run:
+            self.assertEqual(migration.ensure_compatibility_environment(self.profile), prefix / "bin" / "python")
         self.assertFalse(any("create" in c.args[0] for c in run.call_args_list))
         self.assertTrue((prefix / "sft-data-ready.json").is_file())
 
-    def test_interrupted_conda_prefix_has_clear_recovery(self):
-        root = self.root / "managed"
-        (root / "environments" / migration.compatibility_key(self.profile)).mkdir(parents=True)
-        with patch.object(migration, "find_conda", return_value="/conda"), \
-                self.assertRaisesRegex(ValueError, "fresh --compat-root"):
-            migration.ensure_compatibility_environment(self.profile, root)
+    def test_interrupted_conda_creation_has_clear_recovery(self):
+        prefix = self.fake_conda()
+        def incomplete(command):
+            prefix.mkdir(parents=True)
+            raise subprocess.CalledProcessError(1, "conda")
+        with patch.object(migration, "run_child", side_effect=incomplete), self.assertRaises(subprocess.CalledProcessError):
+            migration.ensure_compatibility_environment(self.profile)
+        with patch.object(migration, "run_child") as run, self.assertRaisesRegex(ValueError, "Repair or remove"):
+            migration.ensure_compatibility_environment(self.profile)
+        run.assert_not_called()
 
     def test_user_environment_is_not_modified(self):
-        root = self.root / "managed"
-        prefix = root / "environments" / migration.compatibility_key(self.profile)
+        prefix = self.fake_conda()
         (prefix / "bin").mkdir(parents=True)
         (prefix / "bin" / "python").touch()
-        with patch.object(migration, "find_conda", return_value="/conda"), patch.object(migration, "run_child") as run, \
-                self.assertRaisesRegex(ValueError, "unmanaged existing prefix"):
-            migration.ensure_compatibility_environment(self.profile, root)
+        with patch.object(migration, "run_child") as run, self.assertRaisesRegex(ValueError, "unmanaged existing Conda"):
+            migration.ensure_compatibility_environment(self.profile)
         run.assert_not_called()
 
     def test_concurrent_environment_setup_installs_once(self):
-        root = self.root / "managed"
+        self.fake_conda()
         barrier = threading.Barrier(2)
-        def execute(command):
-            if "create" in command:
-                python = Path(command[command.index("--prefix") + 1]) / "bin" / "python"
-                python.parent.mkdir(parents=True)
-                python.touch()
         def setup():
             barrier.wait(timeout=10)
-            return migration.ensure_compatibility_environment(self.profile, root)
-        with patch.object(migration, "find_conda", return_value="/conda"), \
-                patch.object(migration, "run_child", side_effect=execute) as run, ThreadPoolExecutor(2) as pool:
+            return migration.ensure_compatibility_environment(self.profile)
+        with patch.object(migration, "run_child", side_effect=self.create_environment) as run, ThreadPoolExecutor(2) as pool:
             futures = [pool.submit(setup) for _ in range(2)]
             self.assertEqual(futures[0].result(timeout=20), futures[1].result(timeout=20))
         self.assertEqual(sum("create" in call.args[0] for call in run.call_args_list), 1)
