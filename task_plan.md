@@ -7,7 +7,7 @@
 | 入口迁移 | complete | train.py 直接包含 main/参数解析和调度，原 cli 模块已删除，三个现有测试模块直接导入根入口。 |
 | 评测与判分整体迁回 | complete | 根目录包含完整实现与 CLI，训练和测试引用同步，utils 中旧业务模块已移除。 |
 | DPO/GRPO 独立实现 | complete | 独立模块负责各自配置、Trainer 和训练流程；共用函数与现有结束评测调度位于 train.py。 |
-| 验证与交付 | in_progress | 完整 88 项微型/离线检查、全部入口帮助对照和 62 个本地链接检查通过，待提交并更新 PR57。 |
+| 验证与交付 | complete | 完整 88 项微型/离线检查、入口帮助及 62 个本地链接检查通过；e057cf2 已推送到 PR57，标题与说明已匹配完整整理范围。 |
 
 受控 fetch 确认 PR56 已由用户合入 origin/main/7bb1232；从该基点创建 codex/train-entrypoint-cli。用户研究文件保留，不运行真实模型训练或付费 API。
 
