@@ -1,11 +1,17 @@
 # 当前实现发现
 
+## PR56 冲突处理（2026-11-06）
+
+- PR55 已合入 main/2b9a636，其中 README 最新标题为“回答正确性判定”；PR56 保留相关约定与术语同步。
+- 两分支在共同基点 7d45fa1 后都修改了三份规划文件的开头；正式约定和 README 本身没有内容冲突。双方记录分别保留，当前执行安排只以 task_plan 顶部为准。
+- DPO/GRPO 代码拆分、独立三级、汇总与训练结束编排尚未实施；本轮只处理 Git 合并与规划记录。
+
 ## README 相关文档审计（2026-11-06）
 
 - README 展示板块最新名称为“回答正确性判定”，用于介绍判断模型回答是否正确的方法；内部三级判定规则沿用既有约定。
 - README 的最新展示要求应集中在 docs/readme-writing.md；AGENTS 已有准确入口，不需要重复细则。规则需覆盖目录深度、脚本范围、独立方法用法、简短展示、环境占位符和纯文字报告入口。
-- docs/project-layout.md 仍允许算法共处模块，与下一步拆分 DPO/GRPO 的已确认决定冲突；应改为独立实现目标，当前代码仍共处 utils/training/post_sft.py。
-- docs/automatic-sft-migration.md 仍有“唯一的正常安装入口”和具名环境示例，应同步简洁表述。程序内部 CPU 兼容环境的明确安装来源是实际约定，用户安装示例不指定渠道不改变该行为。
+- docs/project-layout.md 原先允许算法共处模块，已在 PR56 同步为 DPO/GRPO 独立训练实现目标，当前代码仍共处 utils/training/post_sft.py。
+- docs/automatic-sft-migration.md 原先的“唯一的正常安装入口”和具名环境示例已在 PR56 修正。程序内部 CPU 兼容环境的明确安装来源是实际约定，用户安装示例不指定渠道不改变该行为。
 - DPO/GRPO 共用同一次 SFT 起点和固定评测题是实验对照条件，保留；方法运行互不依赖。判分方式称“大模型判分”，API 仍用于描述通信、密钥和请求细节；单独启动与训练后自动启动的真实边界保留。
 - 模型、训练和评分详细约定承担技术规范职责，README 删掉的长说明不转存成新文档。历史报告、研究记录和规划归档保留其历史语境。
 - 当前根部业务入口为 train.py、evaluate_checkpoint.py、rescore_evaluation.py；DPO/GRPO 仍共处 post_sft.py。四入口和独立算法模块属于正式目标，待后续实施；下方旧调查中出现的旧入口与分支状态保留为历史记录。
@@ -19,6 +25,20 @@
 | CONTEXT.md | 新增大模型判分定义，删除 GRPO 定义中重复的跨方法实验条件。 |
 | AGENTS.md、docs/project-goals.md | 已有入口和独立方法目标一致，无需重复新增规则。 |
 | docs/research/、docs/planning-archive/、reports/ | 核查其历史语境；既有记录保留，未跟踪研究文件排除。 |
+
+## README 核查（2026-11-06）
+
+- 用户明确 README 当前不使用 emoji；需要醒目标识时使用纯文字、加粗与普通引用块。
+- “回答正确性判定”与聊天格式使用同级标题，介绍判断模型回答是否正确的方法；一级对原参考终值，二级对所选 R1 正式作答的单框，第三级统称大模型判分。截断直接判错、无法明确判定时待复核。
+- 输出示例最新展示规则：checkpoint-<step>/ 收起为一行用途注释，final/ 展开到文件。
+- 环境示例使用 `<环境名>` 占位符，由读者替换；基础安装命令不强制指定 Conda 渠道。
+- 最新用语：README 简写“大模型判分”，在首次介绍中说明通过 API 调用在线大模型。目录和文件注释描述判分用途，命令用法单独说明如何启动或继续。
+- 根部入口为 train.py、evaluate_checkpoint.py、rescore_evaluation.py。DPO/GRPO 是互斥子命令，各自从 SFT 来源加载并独立运行；post_sft.py 仍通过 stage 分支组织两种算法，代码拆分留待下一步。
+- configs 的子目录只有 training、development、evaluation；公共 generation.yaml 位于 configs 根部。根目录总览及 configs 分树均按用户指定只介绍文件夹层级。
+- 本地没有 outputs/training；训练机路径来自 configs/training/sft.yaml，README 的 training 树按保存代码构造示例。训练结束保存 final 与根级 trainer_state；checkpoint 另含优化器、调度器和随机状态；TensorBoard 事件直接位于 runs。
+- prepared-sft 仅在不兼容旧 SFT 来源缺少缓存时自动准备；数据缓存含 manifest.json 及 dataset 的 Arrow/元数据。相关入口首次读取时可能自动创建 CPU 兼容 Conda 环境，新 SFT 正常准备不建该环境。
+- evaluate 现保存五类文件：JSON、一级 JSONL/Markdown、二级 JSONL/Markdown；手动 rescore 另保存四类文件。当前训练结束只自动执行一二级，README 不应提前声称独立三级及汇总已实现。
+- 主环境 Transformers 4.57.6 的分词器保存逻辑还包含 special_tokens_map.json，Qwen2 fast tokenizer 默认可保存 vocab.json/merges.txt；不能照旧 TF5 产物漏列这些文件。
 
 ## 一二级评测接通（2026-11-06）
 
