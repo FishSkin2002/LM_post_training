@@ -7,7 +7,9 @@
 | 提取本地规则 | complete | single_formal_box/grade_rules 提取到 utils/rule_scoring.py，旧重评直接复用保存规则或兼容原始报告。 |
 | 评测接通二级 | complete | 全量生成一级后才二级，独立 stage2 JSONL/Markdown，按索引追加；中断也保存 JSON 进度。 |
 | 针对性验证 | complete | 完整微型/离线回归 87 项通过；补充二级未完成的 API 拦截及跨生成批次阶段屏障后，定向 23 项和六项边界复测通过。 |
-| 文档与交付 | in_progress | README/规划、语法及八个文档链接检查已完成；准备提交功能 PR。 |
+| 文档与交付 | complete | README/规划、语法及八个链接检查完成；3949c92 已推送并创建 PR54。 |
+
+第二步已交付 [PR54](https://github.com/FishSkin2002/LM_post_training/pull/54)。等待用户审查并说“继续”后推进独立三级评分，不自动跨步骤执行。
 
 后续独立步骤：三级评分新建/续跑、独立结果汇总、训练结束自动编排。已有 rescore 薄入口暂保留，不在本轮启动真实大模型训练或付费 API。研究文件继续保留并排除提交。
 

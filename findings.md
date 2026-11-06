@@ -7,6 +7,7 @@
 - 数据集 index 非连续；二级按已有索引映射跳过已保存题目，不按最大数值续跑、不复核历史答案。一级生成异常时不开始二级。
 - 输出 `.stage2.progress.jsonl` 和 `.stage2.md`；最终 JSON 的顶层 rule_scoring 记录完成情况，每题同名字段记录本地判决，原 correct/metrics 保留一级含义。二级未确认正确表现为 correct=null 且 stage3=not_run，属于尚未评分，不能计为 API 待复核。
 - 本地结果在 JSONL flush 后即算已保存，Markdown 失败后续跑也跳过旧题，不补写旧 Markdown。二级中断时 JSON 保留部分本地结果；旧 API 重评入口对含未完成二级的报告明确拒绝。
+- 第二步已交付 3949c92/PR54，分支 codex/two-stage-checkpoint-evaluation；完整 87 项与后补定向/边界检查通过。下一步独立三级应读取完成的 rule_scoring，继续复用各题本地判决。
 
 ## 目录整理实施（2026-11-06）
 
