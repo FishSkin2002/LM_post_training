@@ -51,22 +51,6 @@ configs/                         # 训练、开发、大模型判分和公共生
         ├── run.json                     # 模型、配置、数据划分与运行来源
         ├── trainer_state.json           # 训练结束时的进度与日志记录
         ├── checkpoint-<step>/           # 训练中保存的完整断点
-        │   ├── README.md                # 适配器模型说明
-        │   ├── adapter_config.json      # LoRA 结构与底座信息
-        │   ├── adapter_model.safetensors # LoRA 权重
-        │   ├── tokenizer.json           # 完整分词器
-        │   ├── tokenizer_config.json    # 分词器设置
-        │   ├── special_tokens_map.json  # 特殊词元映射
-        │   ├── added_tokens.json        # 新增词元及其 ID（按需保存）
-        │   ├── vocab.json               # 词表（部分版本保存）
-        │   ├── merges.txt               # 分词合并规则（部分版本保存）
-        │   ├── chat_template.jinja      # 聊天模板
-        │   ├── training_args.bin        # 本次训练参数
-        │   ├── optimizer.pt             # 优化器状态
-        │   ├── scheduler.pt             # 学习率调度器状态
-        │   ├── rng_state.pth            # 随机数状态
-        │   ├── trainer_state.json       # 当前步数、训练进度与日志
-        │   └── run.json                 # 与该断点对应的运行信息
         ├── final/                       # 正常训练结束后保存的模型产物
         │   ├── README.md                # 适配器模型说明
         │   ├── adapter_config.json      # LoRA 结构与底座信息
@@ -101,7 +85,7 @@ configs/                         # 训练、开发、大模型判分和公共生
         └── .sft-data-migration.lock      # 准备旧 SFT 数据时使用的并发锁
 ```
 
-`<step>` 是断点步数，默认最多保留最近两个断点，每个断点结构如上。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数；`-rescored` 文件在运行大模型判分后生成，`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
+`<step>` 是断点步数，默认最多保留最近两个断点。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数；`-rescored` 文件在运行大模型判分后生成，`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
 
 原始模型的评测默认保存在仓库的 `outputs/evaluations/`；开发输出由开发配置指定。新训练和加训遇到重名运行目录时自动加 `-1`、`-2` 等后缀，断点续训沿用原目录。
 
