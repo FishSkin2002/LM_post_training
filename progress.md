@@ -12,7 +12,7 @@
 - 原环境与新环境各45项检查通过；GPU微型底座/LoRA生成与两步GRPO（合成奖励）通过；未跑真实4B训练。
 - 实际Qwen分词器151669词表、完整后端和中英数学提示IDs跨环境相同。
 - 旧环境微型SFT适配器配导出数据，在新环境真实evaluate_checkpoint生成通过；完成续跑不加载引擎、不重判、不改写JSONL/MD。
-- 旧代码原先被GitHub远端commit_refs_rules拒推；随后PR48要求分支已成功推送创建，旧代码尚未单独发布。计划承接后统一交付新版功能PR。
+- 旧代码原先被GitHub远端commit_refs_rules拒推；随后PR48要求分支已成功推送创建，旧代码尚未单独发布。现已承接并统一交付功能PR #49。
 
 ## 自动迁移实现与验收
 
@@ -24,7 +24,7 @@
 - CPU环境 Python3.12.16 / torch2.6.0+cpu，torch.version.cuda=None，pip check通过；指纹4e255131893486f9、验证索引[19,5]、完整题目/解答/参考/组/源索引/输入IDs/labels逐条相等。结果含全部实际包版本，位于 /tmp/qwen-migration-fixture/migration-result.json；完整日志 /tmp/qwen-sft-migration-end-to-end.log。
 - 重复迁移在阻止 Conda/子进程的检查下通过；额外运行真实公共CLI并把CONDA_EXE指向不存在路径，仍直接复用。未重新判分或改写历史生成 JSONL/Markdown。
 - 主环境针对性检查：生成接口13项、迁移14项、DPO/GRPO微型检查4项通过；此前本轮同时执行的Instruct微型28项通过。覆盖旧缓存自动发现、来源不符拒绝、安装失败/重试、两个层次的并发、未受管环境拒改与未完成缓存。主环境 pip check通过。
-- README 提供唯一主安装入口、一次迁移和日常使用完整命令。未跑真实4B训练、全量数据处理或付费API。功能PR待提交推送。
+- README 提供唯一主安装入口、一次迁移和日常使用完整命令。未跑真实4B训练、全量数据处理或付费API。功能已提交412710e并推送，PR #49：https://github.com/FishSkin2002/LM_post_training/pull/49；等待用户审查合入。
 
 合并文档冲突已解决；受控Git入口无法完成冲突后的merge提交，已获一次性宿主审批完成普通merge，不改写历史。
 

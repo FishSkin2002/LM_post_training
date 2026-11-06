@@ -28,7 +28,7 @@ b53f9cf 已完成公共 vLLM 生成、GRPO、环境预检及手动旧数据导�
 | 主依赖与兼容 worker | complete | 主 requirements、legacy 私有 CPU 配置和 worker，主环境名称无关。 |
 | 迁移与自动复用 | complete | 自动 Conda/pip、锁/完成标记、缓存原子发布、来源核对和普通入口发现。 |
 | 针对性验证 | complete | 单元边界、真实全新 CPU 前缀首迁、原身份/划分/token不变、有效缓存不调用旧Python。 |
-| 文档与交付 | in_progress | README 改为主环境安装/一次迁移/正常命令；必要检查通过后提交推送并提一个完整功能PR。 |
+| 文档与交付 | complete | README 改为主环境安装/一次迁移/正常命令；必要检查通过后提交推送并提一个完整功能PR。 |
 
 ## 范围
 
@@ -37,3 +37,7 @@ b53f9cf 已完成公共 vLLM 生成、GRPO、环境预检及手动旧数据导�
 ## 历史
 
 原2080行规划记录已逐字归档在 [2026-11-06归档](docs/planning-archive/2026-11-06-pre-migration/)。未提交研究 docs/research/math-equivalence-and-sft-loss.md 保留，不混入功能变更。
+
+## 交付
+
+功能已提交并推送，PR #49：https://github.com/FishSkin2002/LM_post_training/pull/49。待用户审查合入；本轮不推进后续正式训练或数据运行。
