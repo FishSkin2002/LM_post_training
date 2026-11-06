@@ -7,6 +7,9 @@
 - 补充首个 API 请求前保存运行信息、取消后续跑/部分汇总、累计各级正确率与固定分母样例等验收。既有训练算法、模型与研究文件未改。
 - 本轮仍使用 PR52 的需求分支；上轮 open 查询结果复用，本轮受控 fetch 确认 main 仍为 1cf99db。接下来检查并推送最新要求及同步 PR 说明。
 - 文档验证通过：git diff --check；11 份 Markdown 的 38 个本地文件/章节链接全部有效；当前约定无待确认标记或旧调用边界冲突。变更范围仅需求、术语与规划，未运行训练或付费 API。
+- 交付：最新要求提交 34fcd8a 已推送到 PR52，包含此前 9e51159 的调用边界调整。GitHub 连接器首次字段校验未通过，修正为 repository_full_name/pr_number 后 API 返回 403（Resource not accessible by integration），未改动远端元数据。
+- 用户通过明确回复允许本次用 gh pr edit 仅更新 PR52 标题/说明；已按准备好的完整文本执行成功，PR 标题为 Define separate evaluation, API scoring, and summary requirements。未修改 PR 状态、评审或合并设置；一次性例外不扩大未来授权。
+- 本轮要求交付完成，等待用户合入并要求继续后，从最新 main 新建功能分支。业务代码与未提交研究文件保持原样。
 
 ## 2026-11-06：改为独立三级评分与汇总
 
