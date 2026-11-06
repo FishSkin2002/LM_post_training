@@ -111,11 +111,11 @@ End your response with the final answer in \boxed{...}, for example \boxed{4}.<|
 
 ## 环境准备
 
-在支持 BF16 的 CUDA 设备上创建环境并安装依赖，先在两处空引号内填写相同的环境名。
+在支持 BF16 的 CUDA 设备上创建环境并安装依赖，将两处 `<环境名>` 替换为相同的自选名称。
 
 ```bash
-conda create -n "" --override-channels -c conda-forge python=3.12 pip -y
-conda activate ""
+conda create -n <环境名> python=3.12 pip -y
+conda activate <环境名>
 python -m pip install -r requirements.txt
 ```
 

@@ -4,7 +4,7 @@
 
 - 三级判分简介与聊天格式使用同级标题；一级对原参考终值，二级对所选 R1 正式作答的单框，第三级统称大模型判分。截断直接判错、无法明确判定时待复核。
 - 输出示例最新展示规则：checkpoint-<step>/ 收起为一行用途注释，final/ 展开到文件。
-- 环境示例不推荐固定名称；创建与激活命令的名称留空，由读者在执行前填写。
+- 环境示例使用 `<环境名>` 占位符，由读者替换；基础安装命令不强制指定 Conda 渠道。
 - 最新用语：README 简写“大模型判分”，在首次介绍中说明通过 API 调用在线大模型。目录和文件注释描述判分用途，命令用法单独说明如何启动或继续。
 - 根部入口为 train.py、evaluate_checkpoint.py、rescore_evaluation.py。DPO/GRPO 是互斥子命令，各自从 SFT 来源加载并独立运行；post_sft.py 仍通过 stage 分支组织两种算法，代码拆分留待下一步。
 - configs 的子目录只有 training、development、evaluation；公共 generation.yaml 位于 configs 根部。根目录总览及 configs 分树均按用户指定只介绍文件夹层级。
