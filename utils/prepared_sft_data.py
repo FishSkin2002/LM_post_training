@@ -7,7 +7,8 @@ import subprocess
 
 from datasets import load_from_disk
 
-from prepare_sft_data import text_format
+from utils.prepare_sft_data import text_format
+from utils.arguments import add_prepared_data_argument
 
 
 def data_environment():
@@ -83,8 +84,3 @@ def load_prepared_sft_data(path, config, tokenizer):
     # Restore the identity already persisted by the verified original-environment export.
     dataset._fingerprint = state["_fingerprint"]
     return dataset, manifest["data_info"]
-
-
-def add_prepared_data_argument(parser):
-    parser.add_argument("--prepared-sft-data", type=Path,
-                        help="Override prepared SFT data; default: reuse or automatically prepare it from the source.")

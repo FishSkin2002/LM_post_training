@@ -1,6 +1,5 @@
 """Train a DPO or GRPO LoRA policy from a finished SFT adapter."""
 
-import argparse
 from functools import partial
 import hashlib
 import math
@@ -18,15 +17,14 @@ import yaml
 from packaging.version import Version
 import trl
 
-from evaluate_checkpoint import evaluate_checkpoint
-from post_training_data import DPO_ANSWER_FORMAT, SOURCES, boxed_reward, prepare_post_training_data
-from prepare_sft_data import CONFIG_DIR, load_tokenizer, prepare_dataset, validate_precision
-from train_sft import load_training_model
-from training_workflow import (TerminalPrinterCallback, TerminalProgressCallback, data_plan,
+from utils.evaluation import evaluate_checkpoint
+from utils.post_training_data import DPO_ANSWER_FORMAT, SOURCES, boxed_reward, prepare_post_training_data
+from utils.prepare_sft_data import load_tokenizer, prepare_dataset, validate_precision
+from utils.training.common import load_training_model, save_final
+from utils.training_workflow import (TerminalPrinterCallback, TerminalProgressCallback, data_plan,
                                read_source, reserve_directory, save_run)
-from generation import (add_generation_arguments, exec_final_evaluation, load_generation_config,
-                        package_version)
-from prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
+from utils.generation import load_generation_config, package_version
+from utils.prepared_sft_data import ensure_prepared_sft_data, load_prepared_sft_data
 
 
 class PostSFTTrainer:
@@ -160,7 +158,7 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None,
     run_path = resume.parent if resume is not None else output_dir or config["output_dir"]
     args = training_arguments(stage, settings, run_path, bf16, tokenizer)
     if stage == "grpo" and args.use_vllm:
-        from generation import validate_vllm_environment
+        from utils.generation import validate_vllm_environment
         validate_vllm_environment(training=True)
         required_context = length_limit + args.max_completion_length
         if args.vllm_max_model_length is None:
@@ -221,41 +219,10 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None,
         result = trainer.train(resume_from_checkpoint=str(resume) if resume is not None else None)
         if not math.isfinite(result.training_loss):
             raise RuntimeError("Training loss is not finite.")
-        final_dir = run_path / "final"
-        trainer.save_model(final_dir)
-        trainer.save_state()
-        print(f"Training complete. Saved adapter and tokenizer to {final_dir}", flush=True)
+        final_dir = save_final(trainer, tokenizer, run_path)
         if generation_settings["backend"] == "transformers":
             if stage != "grpo" or not args.use_vllm:
                 evaluate_checkpoint(final_dir, model=trainer.model, tokenizer=tokenizer, dataset=sft_data,
                                     data_info=sft_info, disable_tqdm=args.disable_tqdm,
                                     generation_config=generation_config, generation_backend="transformers")
     return final_dir
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=SOURCES)
-    parser.add_argument("--config", type=Path, help="Default: configs/training/<stage>.yaml.")
-    parser.add_argument("--output-dir", type=Path, help="New run directory, with collision suffixes as needed.")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--sft-source", type=Path, help="Initialize from a completed SFT final/ adapter.")
-    source.add_argument("--resume-from-checkpoint", type=Path, help="Resume an unfinished stage in its own run directory.")
-    add_generation_arguments(parser)
-    add_prepared_data_argument(parser)
-    args = parser.parse_args()
-    try:
-        final_dir = train(args.stage, args.config or CONFIG_DIR / f"training/{args.stage}.yaml",
-                          sft_source=args.sft_source, resume=args.resume_from_checkpoint, output_dir=args.output_dir,
-                          generation_config=args.generation_config, generation_backend=args.generation_backend,
-                          prepared_sft_data=args.prepared_sft_data)
-        settings = load_generation_config(args.generation_config, args.generation_backend)
-        stage_config = load_stage_config(args.config or CONFIG_DIR / f"training/{args.stage}.yaml", args.stage)[0]
-        if settings["backend"] == "vllm" or (args.stage == "grpo" and stage_config["trainer"].get("use_vllm", False)):
-            exec_final_evaluation(final_dir, args.generation_config, args.generation_backend, args.prepared_sft_data)
-    except (OSError, TypeError, ValueError, KeyError) as error:
-        parser.error(str(error))
-
-
-if __name__ == "__main__":
-    main()

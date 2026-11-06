@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 def make_fixture(root):
     from peft import LoraConfig, get_peft_model
     from tools import test_instruct_sft as fixtures
-    from training_workflow import data_plan, new_run, save_run
+    from utils.training_workflow import data_plan, new_run, save_run
     fixture = fixtures.InstructSFTTests()
     fixture.setUp()
     try:
@@ -46,12 +46,12 @@ def make_fixture(root):
 
 def smoke(root, conda_exe):
     import torch
-    import evaluate_checkpoint as evaluation
-    import generation
+    import utils.evaluation as evaluation
+    import utils.generation as generation
     from legacy.sft_data import migration
-    from prepare_sft_data import load_tokenizer
-    from prepared_sft_data import load_prepared_sft_data, resolve_prepared_sft_data
-    from training_workflow import data_plan, read_source
+    from utils.prepare_sft_data import load_tokenizer
+    from utils.prepared_sft_data import load_prepared_sft_data, resolve_prepared_sft_data
+    from utils.training_workflow import data_plan, read_source
     torch.set_num_threads(1)
     source = root / "sft" / "final"
     original = {p.name: p.read_bytes() for p in source.iterdir() if p.is_file()}
@@ -77,7 +77,7 @@ def smoke(root, conda_exe):
         worker = Path(directory) / "synthetic_worker.py"
         worker.write_text(
             f"import sys, json\nsys.path.insert(0, {str(ROOT)!r})\n"
-            "from datasets import Dataset\nimport math_data\n"
+            "from datasets import Dataset\nfrom utils import math_data\n"
             f"rows = json.load(open({str(root / 'baseline.json')!r}))['rows']\n"
             "math_data.load_dataset = lambda *a, **k: Dataset.from_list(rows)\n"
             "from legacy.sft_data.worker import main\nmain()\n", encoding="utf-8")

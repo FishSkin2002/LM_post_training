@@ -11,8 +11,8 @@ from transformers.trainer_callback import PrinterCallback, ProgressCallback
 from transformers.trainer_utils import has_length
 from tqdm.auto import tqdm
 
-from prepare_sft_data import TEXT_FORMAT, load_tokenizer, require_model, text_format
-from math_scoring import SCORING
+from utils.prepare_sft_data import TEXT_FORMAT, load_tokenizer, require_model, text_format
+from utils.math_scoring import SCORING
 
 
 RUN_FILE = "run.json"
@@ -113,7 +113,7 @@ def read_source(path, config=None, *, resume=False):
 
 
 def new_run(config, plan, epochs, source_path=None):
-    from prepared_sft_data import data_environment
+    from utils.prepared_sft_data import data_environment
     return {
         "config": deepcopy(config), "data": plan, "epochs": epochs, "text_format": deepcopy(plan["source"]["text_format"]),
         "scoring": deepcopy(SCORING), "source_adapter": str(source_path) if source_path else None,

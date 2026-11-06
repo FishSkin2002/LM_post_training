@@ -3,10 +3,16 @@
 from collections import Counter
 import hashlib
 import re
+import sys
 
 from datasets import load_dataset
 
-from math_scoring import boxed_answer, parse_answer
+from utils.math_scoring import boxed_answer, parse_answer
+
+# datasets serializes callable module names into existing data fingerprints.
+# Keep that identity while the public import and source live under utils/.
+sys.modules["math_data"] = sys.modules[__name__]
+__name__ = "math_data"
 
 OPENR1 = {"name": "open-r1/OpenR1-Math-220k", "config": "default", "split": "train", "revision": "main"}
 GSM8K = {"name": "openai/gsm8k", "config": "main", "split": "train", "revision": "main"}

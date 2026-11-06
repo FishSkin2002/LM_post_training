@@ -1,5 +1,14 @@
 # 当前实现发现
 
+## 目录整理实施（2026-11-06）
+
+- PR52 已合入 main/3e3b108，功能分支 codex/organize-training-entrypoints。
+- 当前训练入口只有 train_sft 与 train_post_sft，共用模型加载目前从入口反向导入；计划移入 utils/training/common.py。DPO/GRPO 继续共用一份阶段实现，统一 CLI 只在解析后加载所选阶段。
+- 模块搬迁需修正 prepare_sft_data.CONFIG_DIR、answer_judge.DEFAULT_CONFIG、evaluate 默认输出及 generation 的根部评测脚本定位；使用轻量路径模块统一仓库根。
+- legacy worker 保留独立执行与依赖边界，只更新 utils 导入；API 重评模块保持不导入训练依赖。随机抽样专属测试随功能删除，共享生成边界检查保留。
+- datasets 的 raw.map/filter 指纹包含可调用对象的模块身份，单纯搬 math_data/post_training_data 会影响旧来源恢复。数据转换保留原序列化名称，代码与公共导入仍放 utils/；不改变指纹检查或跳过旧来源校验。
+- 主环境与旧 CPU 环境已各自对照 main/3e3b108：OpenR1、GSM8K、DPO、GRPO 的完整记录、词元、来源、指纹和已有划分不变。保留历史序列化模块名是兼容旧 run 的必要行为，不是供用户执行的旧入口；后续整理时不能简单移除此处兼容。
+
 ## 项目整理调查（2026-11-06）
 
 - 最新决定覆盖前两轮的一体化调用：一二级共一脚本，三级和汇总独立；训练结束的编排负责自动调用，手动一二级不启动三级。三级新建与续跑分开，不选旧运行总是新建，重名加数字。

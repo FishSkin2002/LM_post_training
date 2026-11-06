@@ -17,11 +17,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessor, T
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import test_instruct_sft as fixtures
-import evaluate_checkpoint as evaluation
-import math_data
-import post_training_data as data
-import train_post_sft as training
-from prepare_sft_data import CONFIG_DIR, SYSTEM_PROMPT, build_prompt
+import utils.evaluation as evaluation
+import utils.math_data as math_data
+import utils.post_training_data as data
+import utils.training.post_sft as training
+from utils.training import cli as training_cli
+from utils.prepare_sft_data import CONFIG_DIR, SYSTEM_PROMPT, build_prompt
 
 
 def skywork(question, references):
@@ -203,7 +204,9 @@ class PostSFTTests(unittest.TestCase):
                 patch.object(math_data, "load_dataset", side_effect=self.fixture.raw_dataset), \
                 patch.object(data, "load_dataset", return_value=Dataset.from_list(rows)), \
                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            continuous = training.train(stage, path, sft_source=sft, output_dir=self.root / f"{stage}-full")
+            continuous = self.root / f"{stage}-full" / "final"
+            training_cli.main([stage, "--config", str(path), "--sft-source", str(sft),
+                               "--output-dir", str(continuous.parent)])
             partial = self.root / f"{stage}-resume"
             with patch.object(training, trainer_name, InterruptTrainer), self.assertRaises(fixtures.Interrupted):
                 training.train(stage, path, sft_source=sft, output_dir=partial)

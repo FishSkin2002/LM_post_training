@@ -4,6 +4,7 @@ import contextlib
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import io
+from importlib.metadata import version
 import json
 from pathlib import Path
 import sys
@@ -25,14 +26,15 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import math_data
-import math_scoring as scoring
-import prepare_sft_data as data
-import train_sft
-import training_workflow as workflow
-import sample_checkpoint as sample
-import evaluate_checkpoint as evaluation
-import generation
+import utils.math_data as math_data
+import utils.math_scoring as scoring
+import utils.prepare_sft_data as data
+import utils.training.sft as train_sft
+from utils.training import cli as training_cli
+from utils import arguments
+import utils.training_workflow as workflow
+import utils.evaluation as evaluation
+import utils.generation as generation
 
 # Official Qwen3-4B-Instruct-2507 template, revision cdbee75f17c01a7cc42f958dc650907174af0554.
 TEMPLATE = (Path(__file__).parent / "fixtures/qwen3-instruct-chat-template.jinja").read_text()
@@ -85,6 +87,9 @@ class InstructSFTTests(unittest.TestCase):
         native_config.write_text("backend: transformers\n")
         backend_patch = patch.object(generation, "GENERATION_CONFIG", native_config)
         backend_patch.start()
+        arguments_patch = patch.object(arguments, "GENERATION_CONFIG", native_config)
+        arguments_patch.start()
+        self.addCleanup(arguments_patch.stop)
         self.addCleanup(backend_patch.stop)
         self.base = self.root / "tiny-instruct"
         self.model_name = data.MODEL_NAME
@@ -139,10 +144,19 @@ class InstructSFTTests(unittest.TestCase):
         with patch.object(math_data, "load_dataset", side_effect=self.raw_dataset), contextlib.redirect_stdout(io.StringIO()):
             return data.prepare_dataset(self.config, self.tokenizer)
 
+    def test_prepared_fingerprint_matches_pre_package_training_artifacts(self):
+        # Captured from main/3e3b108 with this fixture in the two supported data stacks.
+        # Moving Python files must not invalidate an otherwise identical saved split.
+        original = {"4.4.2": "ac6f258cf7c0f02e", "5.1.0": "4e255131893486f9"}
+        dataset, info = self.prepared()
+        saved = workflow.data_plan(dataset, data_info=info)
+        saved["fingerprint"] = original[version("datasets")]
+        self.assertEqual(workflow.data_plan(dataset, {"data": saved}, info), saved)
+
     def run_training(self, name, *, resume=None, continue_from=None, epochs=None, trainer=workflow.WorkflowTrainer):
         cfg = self.root / (name+".yaml")
         cfg.write_text(yaml.safe_dump({**self.config, "output_dir": str(self.root/name)}))
-        argv = ["train_sft.py", "--config", str(cfg)]
+        argv = ["train.py", "sft", "--config", str(cfg)]
         if resume:
             argv += ["--resume-from-checkpoint", str(resume)]
         if continue_from:
@@ -152,7 +166,7 @@ class InstructSFTTests(unittest.TestCase):
                 patch.object(AutoModelForCausalLM, "from_pretrained", side_effect=self.model_loader), \
                 patch.object(train_sft, "WorkflowTrainer", trainer), \
                 contextlib.redirect_stdout(io.StringIO()) as terminal, contextlib.redirect_stderr(io.StringIO()) as progress:
-            train_sft.main()
+            training_cli.main()
         self.terminal, self.progress = terminal.getvalue(), progress.getvalue()
         return Path(next(line.split(": ", 1)[1] for line in self.terminal.splitlines() if line.startswith("Output directory:")))
 
@@ -476,14 +490,14 @@ class InstructSFTTests(unittest.TestCase):
         for token,cut,count in [(self.tokenizer.eos_token_id,False,1),(self.tokenizer.convert_tokens_to_ids("question"),True,4)]:
             def forced(**kwargs):return generate(**kwargs,logits_processor=[ForceToken(token)])
             with patch.object(model,"generate",side_effect=forced) as called:
-                _,actual_count,actual_cut=sample.generate_answer(model,self.tokenizer,"question",4)
+                _,actual_count,actual_cut=generation.generate_answers(model,self.tokenizer,["question"],4)[0]
             self.assertEqual((actual_count,actual_cut),(count,cut))
             example=data.build_sft_example(self.tokenizer,"question",trace(1))
             prefix=next(i for i,v in enumerate(example["labels"]) if v!=-100)
             self.assertEqual(called.call_args.kwargs["input_ids"][0].tolist(),example["input_ids"][:prefix])
             self.assertTrue(called.call_args.kwargs["use_cache"])
             self.assertTrue(model.training);self.assertFalse(model.config.use_cache)
-        with self.assertRaisesRegex(ValueError,"exceed"):sample.generate_answer(model,self.tokenizer,"question",256)
+        with self.assertRaisesRegex(ValueError,"exceed"):generation.generate_answers(model,self.tokenizer,["question"],256)
 
     def test_batch_generation_keeps_each_prompt_and_its_first_eos(self):
         model = self.loader(self.base, local_files_only=True)
@@ -511,7 +525,7 @@ class InstructSFTTests(unittest.TestCase):
 
         padding_side = self.tokenizer.padding_side
         with patch.object(model, "generate", side_effect=forced) as called:
-            outputs = sample.generate_answers(model, self.tokenizer, questions, 4)
+            outputs = generation.generate_answers(model, self.tokenizer, questions, 4)
         called.assert_called_once()
         inputs = called.call_args.kwargs
         for question, row, mask in zip(questions, inputs["input_ids"], inputs["attention_mask"], strict=True):
@@ -659,35 +673,13 @@ class InstructSFTTests(unittest.TestCase):
         self.assertTrue(any(g is not None and torch.isfinite(g).all() and g.abs().sum()>0 for g in gradients))
         self.assertTrue(all(p.grad is None for p in model.parameters() if not p.requires_grad))
 
-    def test_sampling_original_and_zero_adapter_share_native_input_and_references(self):
-        ds,info=self.prepared();plan=workflow.data_plan(ds,data_info=info)
-        base=self.model_loader(self.model_name,dtype=torch.float32)
-        adapter=self.root/"sample-zero"
-        get_peft_model(base,LoraConfig(task_type="CAUSAL_LM",target_modules="all-linear",**self.config["lora"])).save_pretrained(adapter)
-        self.tokenizer.save_pretrained(adapter)
-        workflow.save_run(adapter,workflow.new_run(self.config,plan,1))
-        cfg=self.root/"sample.yaml";cfg.write_text(yaml.safe_dump(self.config))
-        reports=[]
-        for label,options in [("original",["--model-name",self.model_name]),("lora",["--checkpoint",str(adapter)])]:
-            output=self.root/(label+".md")
-            argv=["sample_checkpoint.py",*options,"--config",str(cfg),"--device","cpu","--num-samples","2","--local-files-only","--output",str(output)]
-            with patch.object(sys,"argv",argv),patch.object(math_data,"load_dataset",side_effect=self.raw_dataset), \
-                    patch.object(AutoTokenizer,"from_pretrained",side_effect=self.load_tokenizer), \
-                    patch.object(AutoModelForCausalLM,"from_pretrained",side_effect=self.model_loader), \
-                    contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):sample.main()
-            reports.append(output.read_text().split("## 样本",1)[1])
-        self.assertEqual(reports[0],reports[1])
-        self.assertIn("参考最终答案",reports[0])
-        self.assertTrue(all(call["local_files_only"] for call in self.model_calls[1:]))
-
     def test_source_failures_in_all_entrypoints_precede_weight_loading(self):
         run=self.run_training("bad-source");source=run/"final"
         meta=json.loads((source/"run.json").read_text());meta["text_format"]["system"]="changed"
         (source/"run.json").write_text(json.dumps(meta))
         cfg=self.root/"source.yaml";cfg.write_text(yaml.safe_dump(self.config))
-        calls=[(train_sft,["train_sft.py","--config",str(cfg),"--continue-from",str(source),"--additional-epochs","1"]),
-               (evaluation,["evaluate_checkpoint.py","--checkpoint",str(source)]),
-               (sample,["sample_checkpoint.py","--checkpoint",str(source)])]
+        calls=[(training_cli,["train.py","sft","--config",str(cfg),"--continue-from",str(source),"--additional-epochs","1"]),
+               (evaluation,["evaluate_checkpoint.py","--checkpoint",str(source)])]
         for module,argv in calls:
             with patch.object(sys,"argv",argv),patch.object(AutoModelForCausalLM,"from_pretrained",side_effect=AssertionError("weights must not load")), \
                     contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):module.main()
@@ -695,7 +687,7 @@ class InstructSFTTests(unittest.TestCase):
     def test_default_original_output_includes_dataset_identity(self):
         ds,info=self.prepared()
         model=self.model_loader(self.model_name,dtype=torch.float32)
-        with patch.object(evaluation,"__file__",str(self.root/"evaluate_checkpoint.py")), \
+        with patch.object(evaluation,"ROOT",self.root), \
                 patch.object(evaluation,"generate_answers",return_value=[(trace(1),4,False)]*2),contextlib.redirect_stdout(io.StringIO()):
             report=evaluation.evaluate_checkpoint(model_name=self.model_name,model=model,tokenizer=self.tokenizer,
                 dataset=ds,data_info=info,config=self.config,device="cpu",disable_tqdm=True)
@@ -706,9 +698,9 @@ class InstructSFTTests(unittest.TestCase):
     def test_argument_precision_and_atomic_directory_boundaries(self):
         for options in [("--continue-from","/missing"),("--additional-epochs","1"),
                         ("--continue-from","/missing","--additional-epochs","nan")]:
-            with patch.object(sys,"argv",["train_sft.py",*options]), \
+            with patch.object(sys,"argv",["train.py","sft",*options]), \
                     patch.object(math_data,"load_dataset",side_effect=AssertionError("reject before data")), \
-                    contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):train_sft.main()
+                    contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):training_cli.main()
         with self.assertRaises(ValueError):data.validate_precision({"bf16":True},"cpu")
         self.assertEqual(data.model_dtype({"bf16":True}),torch.bfloat16)
         with ThreadPoolExecutor(max_workers=4) as pool:
