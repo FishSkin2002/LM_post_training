@@ -5,9 +5,11 @@
 | 本轮工作 | 状态 | 完成条件 |
 | --- | --- | --- |
 | 依赖修复 | complete | 已添加 httpx[socks]==0.28.1、socksio==1.0.0，并将两包纳入固定配置检查。 |
-| 验证与交付 | in_progress | SOCKS 同步/异步构造及 19 项迁移检查通过，待正常提交和创建 PR。 |
+| 验证与交付 | complete | SOCKS 同步/异步构造及 19 项迁移检查通过，9bbb015 已推送并创建 PR61。 |
 
 PR60 已通过提交关系确认合入 main/56e55d3；本轮从该点创建 codex/legacy-data-socks-proxy。既有数据、训练设置及用户研究文件保持各自原状。
+
+本轮已交付 [PR61](https://github.com/FishSkin2002/LM_post_training/pull/61)。服务器现有旧兼容环境可用 pip 单独补装 HTTPX SOCKS extra；等待用户审查及后续指令。
 
 ## 已完成：兼容环境沿用 Conda 渠道并评估 CUDA 数据处理
 
