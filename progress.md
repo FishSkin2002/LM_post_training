@@ -7,6 +7,7 @@
 - 受控 fetch 与一次 open 列表查询确认 PR57 不再 open，提交关系确认其完整历史已合入 main/1305f0f；从该基点创建独立要求分支 codex/backend-evaluation-batch-policy。
 - 修改 training-workflow 和 vllm-generation 的目标要求及验收；本轮保留运行代码和 README 当前用法，待要求合入后另做功能实现。未跟踪研究文件和历史归档保持。
 - 五份变更文档的 17 个本地文件/章节链接、单一当前计划和 git diff --check 检查通过；代码与 README 无差异。本轮只验证文档，不运行模型训练、生成或付费 API。
+- 要求提交 1fe5409 已正常推送并创建 [PR58](https://github.com/FishSkin2002/LM_post_training/pull/58)。本轮要求整理完成，用户合入后再做功能步骤；PR57 的已合入分支不继续追加提交。
 
 ## 2026-11-06：扩大 PR57 的代码整理范围
 
