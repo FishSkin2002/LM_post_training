@@ -30,7 +30,7 @@ import utils.math_data as math_data
 import utils.math_scoring as scoring
 import utils.prepare_sft_data as data
 import utils.training.sft as train_sft
-from utils.training import cli as training_cli
+import train as training_cli
 from utils import arguments
 import utils.training_workflow as workflow
 import utils.evaluation as evaluation

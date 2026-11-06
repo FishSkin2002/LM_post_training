@@ -19,7 +19,7 @@ from peft import LoraConfig, get_peft_model
 import utils.evaluation as evaluation
 from legacy.sft_data import migration
 import utils.training.sft as train_sft
-from utils.training import cli as training_cli
+import train as training_cli
 import utils.training.post_sft as train_post_sft
 from utils.prepared_sft_data import (load_prepared_sft_data, ensure_prepared_sft_data,
                                resolve_prepared_sft_data, save_prepared_sft_data)

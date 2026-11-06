@@ -1,5 +1,14 @@
 # 当前进展
 
+## 2026-11-06：训练入口直接包含 CLI
+
+- 用户明确保留 train.py，要求把 cli.py 的解析与方法选择移入根目录入口；这轮不拆成三个根目录训练脚本。
+- 受控 fetch 确认 PR56 已合入 main/7bb1232，从该基点创建 codex/train-entrypoint-cli。本轮只推进 CLI 迁移，DPO/GRPO 独立训练实现留下一步。
+- 已核对三个现有测试模块导入旧 cli，生产入口仅 train.py 直接转发；迁移将更新这些导入并删除旧 cli。已保存当前四组帮助输出和缺少 DPO 来源时的行为作对照。
+- 已将 CLI 解析和方法调度原样放入 train.py，保留 main(argv=None) 及 __main__ 保护，删除 utils/training/cli.py；三个测试模块改为直接导入 train。
+- 验证通过：SFT/DPO/GRPO 训练、恢复、加训、评测及旧数据准备的现有 51 项微型/离线检查；四组帮助输出和缺少 DPO 来源时的退出行为逐字一致，CLI 主体 AST 一致，无遗留 Python 导入，git diff --check 正常。日志 /tmp/qwen-train-cli-tests.log。
+- 模型、数据、参数语义和训练实现未改；DPO/GRPO 独立实现拆分仍为下一步，未启动真实训练或付费 API。
+
 ## 2026-11-06：解决 PR56 的规划记录冲突
 
 - 用户明确要求为 PR56 追加提交以便合入；本轮一次 open 查询确认 PR56 仍 open，PR55 已合入 main/2b9a636。

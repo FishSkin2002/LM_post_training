@@ -21,7 +21,7 @@ import utils.evaluation as evaluation
 import utils.math_data as math_data
 import utils.post_training_data as data
 import utils.training.post_sft as training
-from utils.training import cli as training_cli
+import train as training_cli
 from utils.prepare_sft_data import CONFIG_DIR, SYSTEM_PROMPT, build_prompt
 
 
