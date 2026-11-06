@@ -1,337 +1,321 @@
 # 大语言模型数学推理后训练
 
-以学习为目的的大语言模型数学推理后训练项目，主要学习LoRA SFT、DPO、GRPO等。[实验报告](reports/)
+以学习为目的的大语言模型数学推理后训练项目，主要学习 LoRA SFT、DPO、GRPO。
+
+> [!TIP]
+> **[📊 查看实验报告目录 →](reports/)**
+>
+> [实验一：GSM8K 上的 Qwen3-4B-Base LoRA SFT](reports/exp1/report.md)
 
 ## 项目目录
 
 ```text
 .
-├── train.py                     # SFT/DPO/GRPO统一训练入口
-├── evaluate_checkpoint.py       # 原始Instruct或LoRA的同题生成评测入口
-├── rescore_evaluation.py        # 当前三级重评入口，后续拆分为独立评分和汇总
-├── utils/                       # 业务实现，与Agent工具和测试区分
-│   ├── training/
-│   │   ├── cli.py              # 阶段选择及公共训练参数
-│   │   ├── common.py           # 公共模型加载和最终产物保存
-│   │   ├── sft.py              # SFT训练、恢复和加训
-│   │   └── post_sft.py         # DPO/GRPO各自的数据、Trainer和算法设置
-│   ├── math_data.py            # OpenR1/GSM8K读取、R1筛选与来源索引
-│   ├── math_scoring.py         # boxed提取及Math-Verify等价判分
-│   ├── rule_scoring.py         # 沿用一级判决、R1单框补判和二级进度
-│   ├── prepare_sft_data.py     # 原生聊天、长度统计和监督标签
-│   ├── prepared_sft_data.py    # 准备数据读取、身份校验与自动发现
-│   ├── post_training_data.py   # PRM800K偏好对、Skywork题目和奖励
-│   ├── evaluation.py           # 生成评测与按进度追加
-│   ├── rescoring.py            # 当前重评实现
-│   ├── answer_judge.py         # API裁判、重试及判决解析
-│   ├── generation.py           # 公共生成与训练后资源交接
-│   ├── check_vllm_environment.py # 不加载模型的GPU/驱动/依赖检查
-│   ├── training_workflow.py    # 划分、运行状态与终端展示
-│   ├── arguments.py            # 共用命令行参数
-│   └── paths.py                # 仓库与配置目录定位
-├── configs/
-│   ├── development/sft.yaml     # Instruct数据检查及本地输出路径
-│   ├── evaluation/glm-5.3.yaml  # 官方 GLM-5.3 裁判与请求限制
-│   ├── generation.yaml          # 公共生成引擎，默认 vLLM
-│   └── training/
-│       ├── sft.yaml             # 主线Qwen3-4B-Instruct-2507/OpenR1配置
-│       ├── dpo.yaml             # PRM800K 完整解答偏好对
-│       ├── grpo.yaml            # Skywork 数学题与 GRPO 采样设置
-│       └── sft-8b.yaml          # 历史Base配置，新版入口拒绝使用
-├── outputs/
-│   ├── development/<run>/
-│   │   ├── run.json            # 模型、模板、数据、预算、精度和阶段来源
-│   │   ├── checkpoint-<step>/  # 完整断点，最多保留最近两个
-│   │   ├── final/              # LoRA、分词器、原生模板与运行信息
-│   │   ├── prepared-sft/       # 旧 SFT 首次迁移后生成，供各阶段自动复用
-│   │   ├── runs/               # TensorBoard事件
-│   │   ├── evaluations/        # 逐题JSONL、Markdown阅读版和汇总JSON
-│   │   └── trainer_state.json
-│   └── evaluations/            # 原始Instruct的评测报告
-├── docs/                       # 目标、训练和协作约定
-├── tools/
-│   ├── test_instruct_sft.py     # 随机微型模型离线集成检查
-│   ├── test_post_sft.py         # DPO、GRPO 与共用评测离线检查
-│   ├── test_rescore_evaluation.py # 三级重评与模拟 API 离线检查
-│   ├── fixtures/               # 测试用固定版本官方模板
-│   └── git_workflow.py          # 受控Git入口及相应测试
-├── reports/                    # 实验报告
-├── requirements.txt            # 唯一主环境依赖入口（vLLM/cu128）
-├── legacy/sft_data/             # 程序内部 CPU 兼容依赖、配置和 worker
-├── AGENTS.md
-├── CONTEXT.md
-├── task_plan.md
-├── progress.md
-└── findings.md
+├── train.py                     # 训练入口，选择 SFT、DPO 或 GRPO
+├── evaluate_checkpoint.py       # 生成验证集回答，完成一二级判分
+├── rescore_evaluation.py        # 对已保存回答补充 API 判分
+├── configs/                     # 训练、开发、API 裁判和公共生成配置
+├── outputs/                     # 运行生成的训练与评测产物
+├── utils/                       # 训练、数据准备、生成与评分的实现
+├── tools/                       # 开发工具与测试脚本
+├── legacy/                      # 读取旧 SFT 数据所需的兼容程序
+├── docs/                        # 项目目标、设计约定与研究记录
+├── reports/                     # 实验报告及其结果文件
+├── requirements.txt             # Python 环境依赖
+├── README.md                    # 项目目录与脚本用法
+├── .gitignore                   # 不纳入版本管理的文件规则
+├── AGENTS.md                    # Codex 在本项目中的协作规则
+├── CONTEXT.md                   # 项目术语及定义
+├── task_plan.md                 # 当前任务的步骤与完成状态
+├── progress.md                  # 每轮工作与验证结果
+└── findings.md                  # 已确认的环境信息与技术发现
 ```
 
-训练机默认产物目录为 `/root/autodl-tmp/outputs/training/qwen3-4b-instruct-openr1-lora/`；模型和数据缓存位于仓库之外。新训练和加训遇到重名目录或文件会自动加 `-1`、`-2`；续训沿用原目录。适配器必须与同一官方底座配合使用，旧Base运行产物保留但不进入新版恢复或评测。
+### configs 目录
 
-## 主要脚本使用说明
-
-当前已完成业务目录、统一训练入口和一二级评测整合。训练结束使用同一套一二级评测；独立三级与汇总将在后续步骤落实，当前需要 API 时继续使用 `rescore_evaluation.py`。手动一二级不会自动调用 API 或汇总。
-
-主环境默认使用 vLLM，根目录 `requirements.txt` 是唯一正常安装入口。用 Conda 创建 Python，再用 pip 安装依赖；`qwen-vllm` 只是示例名称，可以替换：
-
-```bash
-conda create -n qwen-vllm --override-channels -c conda-forge python=3.12 pip -y
-conda activate qwen-vllm
-python -m pip install -r requirements.txt
-python -m utils.check_vllm_environment
+```text
+configs/                         # 训练、开发、API 裁判和公共生成配置
+├── training/                    # 正式训练配置
+├── development/                 # 开发与数据检查配置
+└── evaluation/                  # API 裁判配置
 ```
 
-固定组合为 PyTorch 2.8.0/cu128、vLLM 0.10.2、TRL 0.27.2 和 Transformers 4.57.6。宿主 NVIDIA 驱动需至少 570.26；容器里的 CUDA Toolkit 不会升级宿主驱动。已有 CUDA 12.4/R550 训练机须先选择支持 CUDA 12.8 的驱动/镜像，再使用该环境。系统可以只安装 Toolkit 12.8，无需另装 12.4；预编译 PyTorch 自带所需 CUDA 运行库，驱动及 Python 包仍须配套。
+### outputs 目录
 
-主环境也可显式加 `--generation-backend transformers` 使用原生生成。旧依赖和数据 worker 集中在 `legacy/sft_data/`，由迁移程序管理，无需手动进入或安装。新 GRPO 配置默认 `trainer.use_vllm: true`，原生训练需在阶段 YAML 显式设为 `false`，该设置与训练结束后的评测引擎分开。旧 GRPO 断点使用原环境及保存时的配置恢复，不将更换引擎或训练库版本当作同一次续训。
+以下按当前保存逻辑，以训练机上的一次 SFT 运行为例；输出位置由配置决定。
 
-真实主线固定使用 `Qwen/Qwen3-4B-Instruct-2507`；配置默认BF16底座/计算、FP32 LoRA及非重入激活检查点，训练时关闭KV cache。真实训练需要支持BF16的CUDA设备；CPU/FP32只用于显式配置的随机微型接口检查。
-
-`train.py` 的三个阶段与 `evaluate_checkpoint.py` 均支持 `--generation-config PATH`（默认 `configs/generation.yaml`）和 `--generation-backend vllm|transformers`。前者控制公共评测，后者覆盖其中的引擎设置；失败时明确报错，不自动更换引擎。四个模型的对比应统一引擎，切换引擎使用新的评测输出路径。
-
-训练正常结束先保存 `final/` 和状态。vLLM 评测通过替换训练进程启动，先释放训练模型、优化器和 GRPO 推理引擎，再加载保存的产物。可随后独立评测 `final/`，无需重新训练。GRPO 的训练采样保持当前策略同步、固定 SFT 参考、KL 和 0/1 数学奖励；具体要求见[vLLM 生成约定](docs/vllm-generation.md)。
-
-直接使用下文的训练和评测命令即可。首次读取需要兼容的旧 SFT 来源时，入口会显示准备进度，自动用 `conda create -n ...` 创建 CPU 兼容环境，再由该环境的 Python 用 pip 安装固定依赖、核对并保存数据，随后继续当前任务。环境位置使用 Conda 自身配置，主环境名称任意；不需要单独运行迁移脚本、激活旧环境或增加启用开关。
-
-首次自动准备需要可用 Conda、网络或包缓存、原数据和足够磁盘空间；Conda 不在 PATH 时可设置 `CONDA_EXE` 指向可执行文件。完成后在源 SFT 运行目录生成 `prepared-sft/`，后续自动复用，不再查询 Conda 或调用旧 Python。主环境新 SFT 按正常流程准备数据。旧权重、run.json、题目/token/划分和生成历史的按条数续跑规则保持原样。
-
-安装中断后重跑原命令可继续；Conda 环境创建未完成或依赖检查失败时，会提示用 Conda 修复该受管环境后再重跑。程序不会覆盖同名但未受管的环境，也不会自动接受渠道新增条款。已有不完整数据缓存或来源/划分不符时明确报错，不跳过校验。
-
-### utils.prepare_sft_data
-
-#### 检查数据、长度分布和监督标签
-
-```bash
-python -m utils.prepare_sft_data
+```text
+/root/autodl-tmp/outputs/         # 训练机产物目录
+└── training/                    # 正式训练产物
+    └── qwen3-4b-instruct-openr1-lora/  # 一次 SFT 运行
+        ├── run.json                     # 模型、配置、数据划分与运行来源
+        ├── trainer_state.json           # 训练结束时的进度与日志记录
+        ├── checkpoint-<step>/           # 训练中保存的完整断点
+        │   ├── README.md                # 适配器模型说明
+        │   ├── adapter_config.json      # LoRA 结构与底座信息
+        │   ├── adapter_model.safetensors # LoRA 权重
+        │   ├── tokenizer.json           # 完整分词器
+        │   ├── tokenizer_config.json    # 分词器设置
+        │   ├── special_tokens_map.json  # 特殊词元映射
+        │   ├── added_tokens.json        # 新增词元及其 ID（按需保存）
+        │   ├── vocab.json               # 词表（部分版本保存）
+        │   ├── merges.txt               # 分词合并规则（部分版本保存）
+        │   ├── chat_template.jinja      # 聊天模板
+        │   ├── training_args.bin        # 本次训练参数
+        │   ├── optimizer.pt             # 优化器状态
+        │   ├── scheduler.pt             # 学习率调度器状态
+        │   ├── rng_state.pth            # 随机数状态
+        │   ├── trainer_state.json       # 当前步数、训练进度与日志
+        │   └── run.json                 # 与该断点对应的运行信息
+        ├── final/                       # 正常训练结束后保存的模型产物
+        │   ├── README.md                # 适配器模型说明
+        │   ├── adapter_config.json      # LoRA 结构与底座信息
+        │   ├── adapter_model.safetensors # LoRA 权重
+        │   ├── tokenizer.json           # 完整分词器
+        │   ├── tokenizer_config.json    # 分词器设置
+        │   ├── special_tokens_map.json  # 特殊词元映射
+        │   ├── added_tokens.json        # 新增词元及其 ID（按需保存）
+        │   ├── vocab.json               # 词表（部分版本保存）
+        │   ├── merges.txt               # 分词合并规则（部分版本保存）
+        │   ├── chat_template.jinja      # 聊天模板
+        │   ├── training_args.bin        # 本次训练参数
+        │   └── run.json                 # 最终产物对应的运行信息
+        ├── runs/                        # TensorBoard 日志
+        │   └── events.out.tfevents.<标识> # 训练与验证曲线的事件文件
+        ├── evaluations/                 # 该运行的生成评测与手动重评
+        │   ├── <评测名>.json            # 评测信息、完整回答与一二级判决
+        │   ├── <评测名>.progress.jsonl  # 逐题回答与一级判决，用于续跑
+        │   ├── <评测名>.md              # 题目、参考解答与模型回答的阅读版
+        │   ├── <评测名>.stage2.progress.jsonl # 二级判决，用于续跑
+        │   ├── <评测名>.stage2.md       # 二级判决的阅读版
+        │   ├── <评测名>-rescored.json   # 手动 API 重评结果与统计
+        │   ├── <评测名>-rescored.progress.jsonl # 手动重评进度
+        │   ├── <评测名>-rescored.md     # 手动重评的阅读版
+        │   └── <评测名>-rescored.api-review.md # API 判分明细与待复核题目
+        ├── prepared-sft/                # 读取旧 SFT 产物时自动准备的数据缓存
+        │   ├── manifest.json            # 数据来源、准备配置与校验信息
+        │   └── dataset/                 # 已准备的数据集
+        │       ├── data-00000-of-00001.arrow # 数据内容，较大时分为多个文件
+        │       ├── dataset_info.json    # 数据集字段与元信息
+        │       └── state.json           # 数据集文件清单与读取状态
+        └── .sft-data-migration.lock      # 准备旧 SFT 数据时使用的并发锁
 ```
 
-首次按配置读取数据和分词器，之后可复用Hugging Face缓存。默认OpenR1的 `default/train`：逐条对齐正确性及完整性标记，每题取原列表首条合格R1轨迹；不训练上游 `solution`。正确性字段中的 `null` 视为未提供判定，至少一个评判器必须明确通过。无法解析参考终值、无合格轨迹的记录和超长记录分别统计。超长不截断；`max_length` 初始检查预算为8192，正式训练前先查看实际长度和保留数量，再决定是否调整配置。
+`<step>` 是断点步数，默认最多保留最近两个断点，每个断点结构如上。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数；`-rescored` 文件仅在手动重评后生成，`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
 
-原生聊天结构为system固定指令、user原题、assistant完整R1解答：
+原始模型的评测默认保存在仓库的 `outputs/evaluations/`；开发输出由开发配置指定。新训练和加训遇到重名运行目录时自动加 `-1`、`-2` 等后缀，断点续训沿用原目录。
+
+## 聊天格式
 
 ```text
 <|im_start|>system
 Solve the following math problem step by step.
 End your response with the final answer in \boxed{...}, for example \boxed{4}.<|im_end|>
 <|im_start|>user
-{problem原文}<|im_end|>
+{题目原文}<|im_end|>
 <|im_start|>assistant
-{选中的R1完整解答}<|im_end|>
+{完整解答}<|im_end|>
 ```
 
-保留R1的LaTeX和think段；只监督assistant正文与一个im_end EOS，system/user/角色头/padding不计loss。生成只输入同一system/user和assistant起始头，不提供参考答案、不预填think。末尾格式换行不作额外监督目标。
+## 环境准备
 
-可选参数：
+在支持 BF16 的 CUDA 设备上创建环境并安装依赖；`qwen-vllm` 可替换为自己的环境名。
 
-| 参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/development/sft.yaml` | 选择数据来源、长度预算及模型分词器。 |
+```bash
+conda create -n qwen-vllm --override-channels -c conda-forge python=3.12 pip -y
+conda activate qwen-vllm
+python -m pip install -r requirements.txt
+```
 
-GSM8K读取接口保留在 `utils/math_data.py`；需测试时在自定义YAML的 `data` 中选择 `openai/gsm8k`、`config: main` 和对应split。保留原题、去掉整个 `<<...>>` 注释的完整参考解答与独立最终数值。新版主SFT入口仍限定OpenR1，不把GSM8K原解答伪造成R1轨迹。
+默认生成引擎为 vLLM，当前依赖使用 CUDA 12.8，宿主 NVIDIA 驱动需至少 570.26。
+
+## 主要脚本使用说明
 
 ### train.py
 
-#### 发起新训练
+执行 SFT、DPO 或 GRPO 训练，支持各自的断点恢复。
+
+首次读取旧 SFT 产物且没有可用数据缓存时，会自动创建 CPU 兼容环境并准备数据，后续复用缓存。各方法正常结束后保存 `final/` 并自动执行全量验证集一二级评测。
+
+#### SFT：发起新训练
 
 ```bash
 python train.py sft
 ```
 
-默认使用 `configs/training/sft.yaml`。先完成数据筛选、长度统计和按题目原文分组的固定划分，再加载模型；seed=42，10%题目组用于验证，同题不跨划分。配置显式保存长度和生成预算，原始模型与SFT比较时使用同一份配置和题目。
-
-训练只验证loss，默认每5000步验证和保存、每10步记录，保留最近两个checkpoint。正常结束先保存final和状态，再复用已有模型做一次完整验证集生成评测；失败可独立重跑，不需加训。`run.json` 绑定模型、原生模板、system、数据指纹/索引、筛选规则、预算、精度和判分版本。
-
-可选参数：
-
-| 参数 | 默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--prepared-sft-data` | 复用缓存，缺失时按来源自动准备 | 显式覆盖准备数据目录；新 SFT 通常无需设置。 |
-| `--generation-config` | `configs/generation.yaml` | 公共评测的生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
-| `--config` | `configs/training/sft.yaml` | 轮次、学习率、LoRA、数据、预算及频率设置。 |
-| `--output-dir` | 配置中的 `output_dir` | 新运行目录，重名自动避让。 |
+| `--config` | `configs/training/sft.yaml` | 选择模型、数据与训练设置。 |
+| `--output-dir` | 配置中的输出目录 | 指定新运行目录，重名自动加后缀。 |
+| `--generation-config` | `configs/generation.yaml` | 设置训练结束后的生成评测。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按来源自动准备或复用 | 指定已有数据缓存目录。 |
 
-#### 从完整断点恢复未完成的训练
+#### SFT：恢复未完成的训练
 
 ```bash
-python train.py sft --resume-from-checkpoint /path/to/run/checkpoint-5000
+python train.py sft --resume-from-checkpoint /path/to/sft-run/checkpoint-5000
 ```
 
-恢复优化器、调度器、随机状态和进度，沿用原数据与训练计划、目录及TensorBoard步数。缺少必要状态或来源不符时在加载权重前拒绝。Ctrl+C不会额外保存中断状态，从最近完整断点继续。
+将路径替换为完整断点，恢复原训练进度；Ctrl+C 后从最近保存的断点继续。
 
-可选参数：
-
-| 参数 | 默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--prepared-sft-data` | 复用缓存，缺失时按来源自动准备 | 显式覆盖准备数据目录；新 SFT 通常无需设置。 |
-| `--generation-config` | `configs/generation.yaml` | 公共评测的生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
-| `--config` | `configs/training/sft.yaml` | 必须与该阶段配置一致。 |
-| `--output-dir` | checkpoint所属运行目录 | 仅允许填写同一目录，不新建后缀。 |
+| `--config` | `configs/training/sft.yaml` | 选择与断点一致的训练配置。 |
+| `--output-dir` | 断点所属运行目录 | 显式填写时须为同一目录。 |
+| `--generation-config` | `configs/generation.yaml` | 设置训练结束后的生成评测。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
 
-#### 完成后开启加训阶段
+#### SFT：完成后加训
 
 ```bash
-python train.py sft --continue-from /path/to/previous/final --additional-epochs 1
+python train.py sft --continue-from /path/to/sft-run/final --additional-epochs 1
 ```
 
-`/path/to/...` 换成实际产物路径。只继承适配器权重，重新创建优化器、调度器、步数和日志目录；`--additional-epochs` 是新阶段追加轮数，可为正小数。来源仍需匹配模型、模板、数据、预算、精度和LoRA结构，不叠加第二套适配器。该阶段也可从自己的完整断点恢复。
+将路径替换为已完成 SFT 的 `final/`；`--additional-epochs` 为追加轮数，可填正小数。加训创建新运行。
 
-可选参数：
-
-| 参数 | 默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--prepared-sft-data` | 复用缓存，缺失时按来源自动准备 | 显式覆盖准备数据目录；新 SFT 通常无需设置。 |
-| `--generation-config` | `configs/generation.yaml` | 公共评测的生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
-| `--config` | `configs/training/sft.yaml` | 新阶段学习率等训练设置；来源协议保持。 |
-| `--output-dir` | 配置路径并自动避重 | 指定新阶段目录。 |
+| `--config` | `configs/training/sft.yaml` | 设置本次加训，保持来源所需配置一致。 |
+| `--output-dir` | 配置中的输出目录，重名加后缀 | 指定新的加训目录。 |
+| `--generation-config` | `configs/generation.yaml` | 设置加训结束后的生成评测。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
 
-#### 从已完成的 SFT 开始 DPO 或 GRPO
+#### DPO：从 SFT 开始训练
 
 ```bash
 python train.py dpo --sft-source /path/to/sft-run/final
-python train.py grpo --sft-source /path/to/sft-run/final
 ```
 
-将 `/path/to/sft-run/final` 换成 `configs/training/sft.yaml` 对应运行的 `final/`，两条命令使用同一路径。两个阶段各自更新一份从 SFT 加载的 LoRA，各有优化器和输出目录。DPO 共用 SFT 提示，按 boxed 格式和可解析性筛选 PRM800K 的 `chosen`。`rejected` 按标题包裹原内容，末尾标题为空或残缺时仅去掉标题。GRPO 在 Skywork 数学题上采样，按最后一个 boxed 答案的数学等价性和原生 EOS 计 0/1 奖励。
+将路径替换为已完成 SFT 的 `final/`，新建一次 DPO 训练。
 
-两个阶段都排除与原 SFT 验证题仅有空白差异的训练题。正常结束后先保存 `final/`，再对原 SFT 验证集生成评测。默认配置面向单 GPU。训练机短测可复制对应 YAML，在 `trainer` 下设置 `max_steps` 并指定单独的 `--output-dir`。默认长度和采样组大小是短测的起始值。短测正常结束后同样进入全量评测，可在看到适配器保存完成后单独用 `evaluate_checkpoint.py --num-samples` 做抽样评测。
-
-| 参数 | 默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--prepared-sft-data` | 复用缓存，缺失时按来源自动准备 | 显式覆盖准备数据目录，保留原身份与划分。 |
-| `--generation-config` | `configs/generation.yaml` | 公共评测的生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
-| `--config` | `configs/training/dpo.yaml` 或 `grpo.yaml` | 指定数据版本、长度、训练步数和算法设置。 |
-| `--output-dir` | 阶段 YAML 的 `output_dir` | 指定新运行目录，重名自动避让。 |
+| `--config` | `configs/training/dpo.yaml` | 选择偏好数据与 DPO 训练设置。 |
+| `--output-dir` | DPO 配置中的输出目录 | 指定新运行目录，重名自动加后缀。 |
+| `--generation-config` | `configs/generation.yaml` | 设置 DPO 结束后的生成评测。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
 
-#### 恢复未完成的 DPO 或 GRPO
+#### DPO：恢复未完成的训练
 
 ```bash
 python train.py dpo --resume-from-checkpoint /path/to/dpo-run/checkpoint-100
 ```
 
-恢复 GRPO 时改用 `grpo` 和相应阶段的断点。续训从断点恢复策略、优化器、调度器和进度，按记录的 SFT 产物重建固定参考。原始 SFT `final/` 需保留在保存时的路径。切换 DPO 答案格式规则时，从 SFT `final/` 开启新运行。
+将路径替换为 DPO 的完整断点；原 SFT `final/` 需保留在保存时的路径。
 
-| 参数 | 默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--prepared-sft-data` | 复用缓存，缺失时按来源自动准备 | 显式覆盖准备数据目录，保留原身份与划分。 |
-| `--generation-config` | `configs/generation.yaml` | 公共评测的生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
-| `--config` | 对应阶段的训练 YAML | 指定与断点一致的阶段配置。 |
-| `--output-dir` | checkpoint 所属运行目录 | 显式填写时须指向同一目录。 |
+| `--config` | `configs/training/dpo.yaml` | 选择与 DPO 断点一致的配置。 |
+| `--output-dir` | 断点所属运行目录 | 显式填写时须为同一目录。 |
+| `--generation-config` | `configs/generation.yaml` | 设置 DPO 结束后的生成评测。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
 
-完整要求见[后续训练约定](docs/post-training-workflow.md)。
+#### GRPO：从 SFT 开始训练
+
+```bash
+python train.py grpo --sft-source /path/to/sft-run/final
+```
+
+将路径替换为已完成 SFT 的 `final/`，新建一次 GRPO 训练。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | `configs/training/grpo.yaml` | 选择数学题数据与 GRPO 训练设置。 |
+| `--output-dir` | GRPO 配置中的输出目录 | 指定新运行目录，重名自动加后缀。 |
+| `--generation-config` | `configs/generation.yaml` | 设置 GRPO 结束后的生成评测。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
+
+#### GRPO：恢复未完成的训练
+
+```bash
+python train.py grpo --resume-from-checkpoint /path/to/grpo-run/checkpoint-100
+```
+
+将路径替换为 GRPO 的完整断点；原 SFT `final/` 需保留在保存时的路径。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--config` | `configs/training/grpo.yaml` | 选择与 GRPO 断点一致的配置。 |
+| `--output-dir` | 断点所属运行目录 | 显式填写时须为同一目录。 |
+| `--generation-config` | `configs/generation.yaml` | 设置 GRPO 结束后的生成评测。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
 
 ### evaluate_checkpoint.py
 
-#### 评测未经本项目训练的原始Instruct
+生成原始模型或训练产物的验证集回答，并完成一二级判分。
+
+首次读取旧 SFT 产物且缺少数据缓存时，会自动创建 CPU 兼容环境并准备数据。中断后重跑相同命令会继续已有进度；需要从头评测时用 `--output` 指定新路径。
+
+#### 评测原始模型
 
 ```bash
 python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 ```
 
-不需要训练目录或适配器。只从缓存加载模型和分词器；数据准备与训练共用同一来源、筛选、分词长度规则及固定划分。省略题数时评测完整验证集。原始模型也接收同一system格式指令，方便提取答案。
-
-可选参数：
-
-| 参数 | 默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--prepared-sft-data` | 复用缓存，缺失时按来源自动准备 | 显式覆盖准备数据目录，保留原身份与划分。 |
-| `--generation-config` | `configs/generation.yaml` | 公共评测的生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
-| `--config` | `configs/training/sft.yaml` | 指定与待比较SFT相同的数据、精度和预算。 |
-| `--sft-source` | 按配置生成固定划分 | 指向待比较的 SFT `final/`，用产物保存的准确划分、模板和预算。与 `--config` 互斥。 |
-| `--num-samples` | 完整验证集 | 选固定顺序前N题，须为合法正整数。 |
-| `--batch-size` | `4` | 固定模式的每批最大题数，或自适应模式的起始题数，须为正整数。 |
-| `--auto-batch-size` | 固定批大小 | 启用成功翻倍、失败后缩小批次的自适应模式。 |
-| `--device` | 自动选择CUDA或CPU | 指定设备；BF16配置要求支持的CUDA。 |
-| `--output` | `outputs/evaluations/` 下按模型和数据命名 | 三种报告的共同基础名。指定 `--sft-source` 时文件名包含该评测划分和解码设置的标识。 |
+| `--config` | `configs/training/sft.yaml` | 设置评测数据与生成预算。 |
+| `--sft-source` | 使用配置确定的划分 | 指向 SFT `final/`，使用其保存的评测配置与划分；与 `--config` 互斥。 |
+| `--num-samples` | 完整验证集 | 评测固定顺序的前 N 题，须为不超过验证集大小的正整数。 |
+| `--batch-size` | `4` | 每批最大题数；自适应模式下为起始题数，须为正整数。 |
+| `--auto-batch-size` | 固定批大小 | 成功时增大批次，生成失败后缩小重试。 |
+| `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足配置的精度要求。 |
+| `--output` | `outputs/evaluations/` 下自动命名 | 指定报告 JSON 路径，同名保存逐题进度和阅读版。 |
+| `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
 
-#### 评测checkpoint或final
+#### 评测训练产物
 
 ```bash
 python evaluate_checkpoint.py --checkpoint /path/to/run/final
 ```
 
-SFT、DPO 和 GRPO 均可通过该命令评测。报告区分训练阶段，共用源 SFT 运行的评测题、模板、精度和生成预算。
+将路径替换为 SFT、DPO 或 GRPO 的 `final/` 或 `checkpoint-<step>/`。省略题数时评测完整验证集。
 
-可选参数：
-
-| 参数 | 默认行为 | 用途 |
+| 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--prepared-sft-data` | 复用缓存，缺失时按来源自动准备 | 显式覆盖准备数据目录，保留原身份与划分。 |
-| `--generation-config` | `configs/generation.yaml` | 公共评测的生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可选 `vllm` 或 `transformers`，显式覆盖。 |
-| `--num-samples` | 完整验证集 | 固定顺序前N题，超范围报错。 |
-| `--batch-size` | `4` | 固定模式的每批最大题数，或自适应模式的起始题数，须为正整数。 |
-| `--auto-batch-size` | 固定批大小 | 启用成功翻倍、失败后缩小批次的自适应模式。 |
-| `--device` | 自动选择 | 设备需满足来源精度要求。 |
-| `--output` | `<run>/evaluations/<checkpoint>-<dataset>-<config>-<split>-n<N>.json` | 自定义报告位置。 |
-| `--config` | 使用产物保存的评测配置 | 仅原始模型评测使用外部配置。 |
-
-两种模型来源互斥。生成使用贪心和保存的 `max_new_tokens`，初始检查配置为8192；前后比较固定预算，不提供标准解答，遇im_end停止。数据身份进入默认路径，避免复用旧Base或另一数据集的进度文件。
-
-自动生成评测也默认每批最多 4 题。每批返回后按题序逐题做一级评分、追加并 flush `.progress.jsonl`，再向 `.md` 追加新题。全部生成及一级完成后，OpenR1 继续执行二级；逐题记录题目、完整参考解答、参考终值、模型回答、原始索引、token 数、判分、截断、实际批大小和分摊耗时。
-
-启用 `--auto-batch-size` 后，每批生成成功就翻倍，直到首次生成异常。首次异常优先回到最后成功的较小批次，首批即异常或尾批已经更小时则直接减半。此后遇到异常就减半，从同一题重试。单题仍异常时报告原错误。
-
-中断后使用相同来源、数据、题数和输出路径重跑，可调整批大小和模式。已有 N 条就从第 N+1 题继续，自适应模式从本次指定的起始大小重新试探。错误、格式无效及截断记录同样复用，不重新核验；Markdown 只追加新题，不重建旧正文。批生成耗时在该批题目间均分，每题另计评分耗时。汇总将保存的耗时相加，旧记录按单题批次读入。从头重评使用新的 `--output`。
-
-一级取最后一个 `\boxed{...}`，处理嵌套花括号，再用固定版本 Math-Verify 比较参考终值，支持分数/小数等数学等价；A–E 选项使用字符串解析，忽略大小写。一级不根据题干把选项字母换算成数值答案；未通过的非截断回答进入二级。截断回答直接判错并结束，不进入二级或 API。
-
-二级沿用已保存的一级判决，比较选中 R1 与模型正式回答中的单个 boxed。有 `</think>` 时取最后一个边界后的正文，否则检查全文；双方都需恰有一个完整、非空、可解析的框。参考终值为数值、R1 和模型都回答 B 时，可在二级确认正确。二级未确认正确的题保留为等待三级；本命令到二级结束，不调用 API。不验证逐步推导，SFT 仍按参考词元交叉熵训练。完整规则见[分级判定约定](docs/evaluation-rescoring.md)。
-
-同一输出基础名的产物：
-
-| 文件 | 内容与恢复行为 |
-| --- | --- |
-| `.progress.jsonl`、`.md` | 原始生成与一级判决，沿用已有定位和按条数追加。 |
-| `.stage2.progress.jsonl` | 各题的本地规则结果；一级已终止的题将后级记为未执行。按保存索引续跑，不重判已有记录。 |
-| `.stage2.md` | 仅追加本次新处理的本地判决，按数据集索引对应原始回答；不重建旧正文。 |
-| `.json` | 保存模型、数据、完整回答和各题 `rule_scoring`。顶层同名字段记录二级进度与是否完成；中断时保留已落盘结果。 |
-
-原有 `correct` 和 `metrics.answer_accuracy` 仍表示一级结果，各题 `rule_scoring` 保存一二级结论。其中 `correct=null` 且三级未执行表示等待独立三级评分，与 API 执行后的待复核不同。各级累计指标的独立汇总脚本在后续步骤提供。二级中断后重跑同一命令即可继续；一级已完成则跳过生成，二级也已完成则只读取保存结果，不重新检查回答。GSM8K 保持原基础评测路径。
+| `--num-samples` | 完整验证集 | 评测固定顺序的前 N 题，须为不超过验证集大小的正整数。 |
+| `--batch-size` | `4` | 每批最大题数；自适应模式下为起始题数，须为正整数。 |
+| `--auto-batch-size` | 固定批大小 | 成功时增大批次，生成失败后缩小重试。 |
+| `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足来源精度要求。 |
+| `--output` | 运行目录的 `evaluations/` 下自动命名 | 指定报告 JSON 路径，同名保存逐题进度和阅读版。 |
+| `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
+| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
+| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
 
 ### rescore_evaluation.py
 
-#### 准备 API 裁判凭据
+对已保存的 OpenR1 评测回答补充 API 判分，保存重评报告。
 
-在运行重评的 Bash 终端中输入密钥：
+#### 准备 API 密钥
+
+在运行重评的终端中输入默认裁判所需的密钥：
 
 ```bash
 read -rsp 'GLM API Key: ' ZAI_API_KEY
 export ZAI_API_KEY
 ```
 
-默认裁判配置为 `configs/evaluation/glm-5.3.yaml`，使用官方 `glm-5.3` 接口，密钥从 `ZAI_API_KEY` 读取。配置中可调整基础地址、模型名、凭据环境变量、超时、最大尝试次数、重试间隔、输出预算及模型支持的 `request_parameters`。默认每次请求超时 180 秒，最多尝试 3 次，输出预算 4096 tokens；不会在配置或报告中保存密钥。
-
-切换到 DeepSeek 时，复制 YAML 并填写官方基础地址、实际模型名及对应凭据环境变量，再通过 `--config` 选择。`request_parameters` 直接对应请求体中的附加参数，不能覆盖模型、消息、流式模式及输出预算。
-
-#### 对完整生成报告补充后续判分
+#### 发起重评
 
 ```bash
 python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json
 ```
 
-把路径替换为生成完成的 OpenR1 JSON 报告及新的输出路径。原始 Instruct、SFT、DPO、GRPO 的报告均可使用；不接受生成过程中的 JSONL，不重新生成答案或加载 Qwen 权重。现有生成入口和 GRPO 奖励继续使用原有评分。
-
-第一级已在生成阶段完成，直接沿用保存的 `correct`、`format_valid` 和 `truncated`，不重新数学核验。截断或一级判正确的题直接结束；其余结果进入第二级。第二级只比较 R1 和模型正式回答里的单个完整非空 boxed，通过后停止，否则调用 API。API 无法确定、返回内容不符合要求或请求失败均记为待复核。明确的思考结束边界为 `</think>`，没有边界时检查全文。
+将 `--input` 替换为已完成一二级评测的 JSON 报告，将 `--output` 替换为新的报告路径。
 
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | `configs/evaluation/glm-5.3.yaml` | 选择服务地址、实际裁判模型和请求设置。 |
-| `--output` | 输入文件同目录的 `原文件名-rescored.json` | 指定新报告的基础名，不能覆盖输入。 |
-| `--retry-pending` | 复用已有待复核判决 | 本次重新尝试待复核题；已明确判决的题继续复用。 |
-
-以 `evaluation-rescored.json` 为输出时，同时保存：
-
-- `.progress.jsonl`：本次独立重评的逐题判决，随判分立即保存，用于继续运行。
-- `.json`：整体正确率和完整逐题结果，保留原报告的指标与原判分。
-- `.md`：逐题追加的阅读版，最新正确比例、正确题数/总题数、待复核数量及题号在文末。
-- `.api-review.md`：追加所有进入第三级的题目，标明 API 判对、判错或待复核，含前两级失败原因、原题、参考、回答及 API 判分依据。
-
-JSON 在完成或中断时更新汇总，Markdown 每题追加，并在文末追加本次汇总。已有正文不读取或重写；重试待复核题时追加新的判决，同一索引以较后的判决为准。正确率始终为已确认正确数除以全部输入题数，待复核题保留在分母里；API 新增正确会自动计入，不重复累加。截断题在第一级终止，不进入 API 或待复核列表。中断时另报尚未处理的题数。完整规则见[独立重评约定](docs/evaluation-rescoring.md)。
+| `--config` | `configs/evaluation/glm-5.3.yaml` | 选择 API 地址、裁判模型与请求设置。 |
+| `--retry-pending` | 复用已保存的待复核判决 | 重新尝试待复核题。 |
 
 #### 继续重评或重试待复核题
 
@@ -339,74 +323,8 @@ JSON 在完成或中断时更新汇总，Markdown 每题追加，并在文末追
 python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json --retry-pending
 ```
 
-继续时只按已保存的索引跳过旧记录，不核查历史题目、判决内容或配置身份，只追加未处理的题。读取保存的判决供正确率汇总，不重新计算旧分数。加上 `--retry-pending` 才会再次处理已有待复核题，之前的尝试记录一并保留。输入、模型、提示或配置变化时自行选择新的输出路径。缺少凭据时，仅需 API 的题记为待复核，设置凭据后可用该命令继续。
+沿用原来的输入和输出路径；不加 `--retry-pending` 时仅继续未处理题，加上后也重试待复核题。缺少密钥时，需要 API 的题会记为待复核。
 
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
 | `--config` | `configs/evaluation/glm-5.3.yaml` | 沿用首次重评的裁判配置。 |
-| `--retry-pending` | 省略时复用待复核记录 | 本次重新尝试待复核题。 |
-
-### TensorBoard
-
-#### 查看训练与验证曲线
-
-```bash
-tensorboard --logdir /root/autodl-tmp/outputs/training
-```
-
-开发输出可改填 `outputs/development`，单次运行可填其 `runs/`。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--port` | `6006` | 指定端口。 |
-| `--host` | TensorBoard默认值 | 指定监听地址。 |
-
-`train/loss`、`train/grad_norm`、`train/learning_rate`、`train/epoch`记录训练状态；`eval/loss`、`eval/runtime`、`eval/samples_per_second`来自完整验证集loss。生成正确率单独写评测报告，不能把验证loss解释成生成正确率。
-
-### tools/test_instruct_sft.py
-
-#### 离线检查数据、训练、恢复及评测
-
-```bash
-HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_instruct_sft.py
-```
-
-使用随机微型Qwen/LoRA、固定版本官方模板、合成OpenR1记录和真实Math-Verify。验证筛选/分组/长度、掩码/EOS、参数更新、恢复/加训、TensorBoard、生成前后对比、逐题续跑及缓存恢复；不加载真实4B权重或测量其显存与准确率。
-
-20条真实记录与官方完整分词器的检查结果见[样本检查记录](docs/research/openr1-data-smoke.md)，包含长度范围和数据标签与本地判分不一致的具体边界。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `-v` | 关闭详细逐项输出 | 显示测试名称。 |
-| `-q` | 默认unittest输出 | 简略显示。 |
-| `-k` | 全部 | 按名称筛选。 |
-
-### tools/test_rescore_evaluation.py
-
-#### 离线检查三级重评
-
-```bash
-python tools/test_rescore_evaluation.py
-```
-
-使用真实 Math-Verify 和模拟 HTTP 响应检查三级路由、截断拦截、API 协议及重试、待复核、正确率汇总、人工核查明细、输入保护和继续处理。不调用真实付费 API；裁判的实际判分质量需人工核查。可用 `-v` 查看逐项结果。
-
-### tools/test_rule_evaluation.py
-
-#### 离线检查一二级评测与分别续跑
-
-```bash
-HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_rule_evaluation.py
-```
-
-用随机微型模型和真实 Math-Verify 核对全量一级后才二级、R1 单框补判、截断终止、两阶段中断、按索引续跑、历史 JSONL/Markdown 追加、完成重跑与 GSM8K 路径。整个评测不调用 API；另核对旧重评直接复用本地规则结果。
-
-### tools/test_post_sft.py
-
-#### 离线检查 DPO、GRPO 和共用评测
-
-```bash
-HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 python tools/test_post_sft.py
-```
-
-使用随机微型模型核对偏好对、奖励、参考冻结、参数更新、保存恢复和评测一致性。可用 `-v` 查看逐项结果。

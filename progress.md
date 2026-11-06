@@ -1,5 +1,17 @@
 # 当前进展
 
+## 2026-11-06：README 整理范围已确认
+
+- 按用户调用的 grill-with-docs 读取 grilling/domain-modeling，并委派两个只读核查，确认根目录当前仅 train/evaluate/rescore 三个业务入口；DPO/GRPO 运行独立，但实现共处 post_sft。
+- 用户确认：每个根部脚本一句介绍，保留用途命令与必要参数；删除原理、内部实现及大段环境说明，不转存新文档；本轮只整理文档，下个代码步骤再拆 DPO/GRPO。
+- 目录总览不展开文件夹，全部文件/文件夹有注释；另列 configs 文件夹层级和 training 的完整文件示例，聊天格式独立成节，实验报告使用醒目入口。
+- 受控 fetch 和本轮一次 open PR 查询确认 PR54 已合入 main/7d45fa1；受控 start 首次因沙箱 .git 只读失败，正式宿主审批后创建 codex/readme-layout-and-script-guide。
+- 使用 planning-with-files-zh 和 writing-for-agents 维护本轮记录；研究文件未改，不运行真实训练或付费 API。
+- README 已重组：总览文件夹不展开、所有条目有注释；configs 单列文件夹，training 示例展开 checkpoint/final/日志/评测/条件性数据缓存；聊天格式单独展示，标题下突出实验报告目录及现有实验一。
+- 主要脚本仅保留根部三个入口，各一句介绍；SFT/DPO/GRPO 的用途命令与参数就近列出，DPO/GRPO 的新训练和恢复分别展示。原理、实现、内部工具和测试说明直接删除，未另建文档。脚本部分由 13568 减为 6090 字符（约减少 55%）。
+- 验证 train 的 sft/dpo/grpo、evaluate、rescore 五组实际 --help；两处报告链接、配置路径、目录结构与注释、原生聊天 system 与代码的一致性均通过。输出示例已对照保存逻辑，文件名中的 OpenR1 大小写已修正。
+- 核查时误读不存在的 legacy/sft_data/environment.py，改用 rg --files 后定位 migration.py 并确认锁文件保留；未影响变更。仅文档改动，不运行训练回归或付费 API。
+
 ## 2026-11-06：开始一二级评测整合
 
 - 用户确认 PR53 已合入；远程 main/33367b2 已包含该 PR，新建功能分支 `codex/two-stage-checkpoint-evaluation`。
