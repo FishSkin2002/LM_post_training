@@ -11,6 +11,7 @@
 - 主要脚本仅保留根部三个入口，各一句介绍；SFT/DPO/GRPO 的用途命令与参数就近列出，DPO/GRPO 的新训练和恢复分别展示。原理、实现、内部工具和测试说明直接删除，未另建文档。脚本部分由 13568 减为 6090 字符（约减少 55%）。
 - 验证 train 的 sft/dpo/grpo、evaluate、rescore 五组实际 --help；两处报告链接、配置路径、目录结构与注释、原生聊天 system 与代码的一致性均通过。输出示例已对照保存逻辑，文件名中的 OpenR1 大小写已修正。
 - 核查时误读不存在的 legacy/sft_data/environment.py，改用 rg --files 后定位 migration.py 并确认锁文件保留；未影响变更。仅文档改动，不运行训练回归或付费 API。
+- README 与本轮记录已提交 6297e28，正常推送并创建 [PR55](https://github.com/FishSkin2002/LM_post_training/pull/55)。本轮整理完成，下一步 DPO/GRPO 代码拆分等待用户继续；既有独立三级、汇总与训练后编排仍未实施。
 
 ## 2026-11-06：开始一二级评测整合
 

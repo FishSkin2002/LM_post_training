@@ -6,9 +6,11 @@
 | --- | --- | --- |
 | 事实核对与范围确认 | complete | 已核对三个根部入口、目录与保存逻辑；用户已确认删除多余说明、本轮不拆代码。 |
 | README 重组 | complete | 根目录逐项注释；configs 只列文件夹；training 示例展开到文件；仅三个根部脚本，DPO/GRPO 独立说明；聊天格式与报告入口已整理。 |
-| 验证与交付 | in_progress | 五组 CLI 帮助、配置路径、两处链接、目录注释与聊天内容检查通过，待提交并发起 PR。 |
+| 验证与交付 | complete | 五组 CLI 帮助、配置路径、两处链接、目录注释与聊天内容检查通过；6297e28 已推送并创建 PR55。 |
 
 最新远程 main/7d45fa1 已包含 PR54；本轮从该基点创建 `codex/readme-layout-and-script-guide`。未跟踪研究文件保留并排除提交。后续代码拆分和既有独立三级/汇总步骤，均等待用户继续。
+
+本轮已交付 [PR55](https://github.com/FishSkin2002/LM_post_training/pull/55)。用户已选择下一步拆分 DPO/GRPO 实现，本轮不提前实施。
 
 ## 已完成第二步：接通一二级评测
 
