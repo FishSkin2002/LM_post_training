@@ -20,7 +20,7 @@ from utils.rule_scoring import apply_rule_scoring
 from utils.prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 from utils.training_workflow import data_plan, format_metrics, read_source
 
-DEFAULT_BATCH_SIZE = 4
+DEFAULT_BATCH_SIZES = {"transformers": 4, "vllm": 64}
 
 
 def answer_metrics(results):
@@ -49,8 +49,13 @@ def readable_prediction(position, prediction):
 
 def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, output=None, device=None,
                         model=None, tokenizer=None, dataset=None, data_info=None, config=None, disable_tqdm=False,
-                        sft_source=None, batch_size=DEFAULT_BATCH_SIZE, auto_batch_size=False,
+                        sft_source=None, batch_size=None, auto_batch_size=False,
                         generation_config=None, generation_backend=None, prepared_sft_data=None):
+    generation_settings = load_generation_config(generation_config, generation_backend)
+    if auto_batch_size and generation_settings["backend"] != "transformers":
+        raise ValueError("--auto-batch-size requires --generation-backend transformers; vLLM uses fixed chunks.")
+    if batch_size is None:
+        batch_size = DEFAULT_BATCH_SIZES[generation_settings["backend"]]
     if type(batch_size) is not int or batch_size < 1:
         raise ValueError("batch-size must be a positive integer.")
     if (checkpoint is None) == (model_name is None):
@@ -79,7 +84,6 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
             raise ValueError("Model and configuration differ.")
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     validate_precision(config, device)
-    generation_settings = load_generation_config(generation_config, generation_backend)
     if tokenizer is None:
         tokenizer = load_tokenizer(checkpoint or sft_source or model_name, local_files_only=True)
     if metadata and text_format(tokenizer) != metadata["text_format"]:
@@ -238,10 +242,11 @@ def main():
     evaluation_source.add_argument("--sft-source", type=Path,
                                    help="Anchor original-model evaluation to the exact held-out split of an SFT artifact.")
     parser.add_argument("--num-samples", type=int, help="Evaluate the first N validation questions; default: all.")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
-                        help="Fixed batch size or starting size with --auto-batch-size (default: %(default)s).")
+    parser.add_argument("--batch-size", type=int,
+                        help=f"Maximum questions per call (default: vLLM {DEFAULT_BATCH_SIZES['vllm']}, "
+                             f"Transformers {DEFAULT_BATCH_SIZES['transformers']}); starting size in adaptive mode.")
     parser.add_argument("--auto-batch-size", action="store_true",
-                        help="Double successful generation batches until the first failure, then retry with smaller batches.")
+                        help="Transformers only: double successful batches until the first failure, then retry smaller batches.")
     parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
     add_generation_arguments(parser)

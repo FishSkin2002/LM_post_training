@@ -1,6 +1,7 @@
 """Backend contract tests without downloading a real model or invoking CUDA."""
 
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+import io
 import json
 from pathlib import Path
 import sys
@@ -52,6 +53,137 @@ class GenerationTests(unittest.TestCase):
 
     def output(self, ids, reason="stop"):
         return SimpleNamespace(outputs=[SimpleNamespace(token_ids=ids, finish_reason=reason)])
+
+    def evaluate(self, dataset, info, **kwargs):
+        kwargs.setdefault("output", self.root / "evaluation.json")
+        with redirect_stdout(io.StringIO()):
+            return evaluation.evaluate_checkpoint(
+                model_name=self.fixture.model_name, tokenizer=self.tokenizer, config=self.fixture.config,
+                dataset=dataset, data_info=info, device="cpu", disable_tqdm=True, **kwargs)
+
+    def test_evaluation_defaults_follow_the_effective_backend_and_keep_fixed_chunks(self):
+        self.fixture.raw = [fixtures.raw_row(i) for i in range(1290)]
+        dataset, info = self.fixture.prepared()
+        config = self.root / "vllm.yaml"
+        config.write_text("backend: vllm\n")
+
+        def answers(questions, budget):
+            return [("invalid", budget, True)] * len(questions)
+
+        for backend, override, sizes in (("vllm", None, [64, 64, 1]),
+                                         ("transformers", "transformers", [4] * 32 + [1])):
+            engine = Mock(initialization_runtime=0.0, description={"backend": backend})
+            engine.generate.side_effect = answers
+            with self.subTest(backend=backend), patch.object(evaluation, "create_generator", return_value=engine), \
+                    patch.object(evaluation, "generate_answers", side_effect=lambda m, t, q, b: answers(q, b)) as native:
+                report = self.evaluate(dataset, info, generation_config=config, generation_backend=override,
+                                       output=self.root / f"{backend}.json")
+            calls = engine.generate if backend == "vllm" else native
+            question_arg = 0 if backend == "vllm" else 2
+            self.assertEqual([len(call.args[question_arg]) for call in calls.call_args_list], sizes)
+            self.assertEqual(report["generation"]["batch_size"], sizes[0])
+            self.assertFalse(report["generation"]["auto_batch_size"])
+            self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],
+                             [size for size in sizes for _ in range(size)])
+            self.assertEqual([row["index"] for row in report["predictions"]], report["data"]["indices"])
+            engine.recover.assert_not_called()
+            engine.close.assert_called_once()
+
+    def test_vllm_fixed_failure_preserves_progress_and_resume_can_change_chunk_size(self):
+        self.fixture.raw = [fixtures.raw_row(i) for i in range(60)]
+        dataset, info = self.fixture.prepared()
+        output = self.root / "resume.json"
+        progress_path, readable_path = output.with_suffix(".progress.jsonl"), output.with_suffix(".md")
+        failure = RuntimeError("vLLM worker failed")
+        engine = Mock(initialization_runtime=0.0, description={"backend": "vllm"})
+        engine.generate.side_effect = [[("invalid", 4, True)] * 2, failure]
+        with patch.object(evaluation, "create_generator", return_value=engine), \
+                self.assertRaises(RuntimeError) as caught:
+            self.evaluate(dataset, info, generation_backend="vllm", batch_size=2, output=output)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual([len(call.args[0]) for call in engine.generate.call_args_list], [2, 2])
+        engine.recover.assert_not_called()
+        engine.close.assert_called_once()
+        saved, readable = progress_path.read_bytes(), readable_path.read_bytes()
+        self.assertEqual(len(saved.splitlines()), 2)
+
+        resumed = Mock(initialization_runtime=0.0, description={"backend": "vllm"})
+        resumed.generate.side_effect = lambda questions, budget: [("invalid", budget, True)] * len(questions)
+        with patch.object(evaluation, "create_generator", return_value=resumed):
+            report = self.evaluate(dataset, info, generation_backend="vllm", batch_size=3, output=output)
+        self.assertEqual([len(call.args[0]) for call in resumed.generate.call_args_list], [3, 1])
+        self.assertEqual(resumed.generate.call_args_list[0].args[0][:2], engine.generate.call_args_list[1].args[0])
+        self.assertTrue(progress_path.read_bytes().startswith(saved))
+        self.assertTrue(readable_path.read_bytes().startswith(readable))
+        self.assertEqual([row["index"] for row in report["predictions"]], report["data"]["indices"])
+        self.assertEqual([row["generation_batch_size"] for row in report["predictions"]], [2, 2, 3, 3, 3, 1])
+        self.assertEqual(report["generation"]["batch_size"], 3)
+        resumed.recover.assert_not_called()
+
+    def test_vllm_rejects_adaptive_batches_before_loading_sources_or_creating_outputs(self):
+        output = self.root / "rejected.json"
+        with ExitStack() as stack:
+            loaders = [stack.enter_context(patch.object(evaluation, name)) for name in
+                       ("read_source", "load_tokenizer", "ensure_prepared_sft_data", "prepare_dataset", "create_generator")]
+            for source in ({"model_name": self.fixture.model_name}, {"checkpoint": self.root / "missing"}):
+                with self.subTest(source=source), self.assertRaisesRegex(ValueError, "auto-batch-size.*transformers"):
+                    evaluation.evaluate_checkpoint(**source, generation_backend="vllm", auto_batch_size=True,
+                                                   output=output)
+            terminal = io.StringIO()
+            argv = ["evaluate_checkpoint.py", "--model-name", self.fixture.model_name, "--generation-backend", "vllm",
+                    "--auto-batch-size", "--output", str(output)]
+            with patch.object(sys, "argv", argv), redirect_stderr(terminal), self.assertRaises(SystemExit) as caught:
+                evaluation.main()
+            self.assertEqual(caught.exception.code, 2)
+            self.assertIn("auto-batch-size requires --generation-backend transformers", terminal.getvalue())
+            for loader in loaders:
+                loader.assert_not_called()
+        self.assertFalse(list(self.root.glob("rejected*")))
+
+    def test_evaluation_rejects_invalid_explicit_batch_sizes_for_both_backends(self):
+        for backend in ("vllm", "transformers"):
+            for size in (0, -1, True, 1.5, "4"):
+                with self.subTest(backend=backend, size=size), self.assertRaisesRegex(ValueError, "positive integer"):
+                    evaluation.evaluate_checkpoint(model_name=self.fixture.model_name,
+                                                   generation_backend=backend, batch_size=size)
+
+    def test_post_training_native_call_and_vllm_cli_use_backend_defaults(self):
+        dataset, info = self.fixture.prepared()
+        final = self.root / "run/final"
+        metadata = {"config": self.fixture.config, "data": data_plan(dataset, data_info=info),
+                    "text_format": evaluation.text_format(self.tokenizer)}
+
+        def generator(model_name, checkpoint, tokenizer, config, settings, device, **kwargs):
+            engine = Mock(initialization_runtime=0.0, description={"backend": settings["backend"]})
+            engine.generate.side_effect = lambda questions, budget: [("invalid", budget, True)] * len(questions)
+            return engine
+
+        def execute(executable, args):
+            self.assertEqual(executable, sys.executable)
+            with patch.object(sys, "argv", args[1:]):
+                evaluation.main()
+
+        with patch.object(evaluation, "read_source", return_value=(final, metadata, None)), \
+                patch.object(evaluation, "load_tokenizer", return_value=self.tokenizer), \
+                patch.object(evaluation, "ensure_prepared_sft_data", return_value=None), \
+                patch.object(evaluation, "prepare_dataset", return_value=(dataset, info)), \
+                patch.object(evaluation, "create_generator", side_effect=generator), \
+                patch.object(evaluation, "generate_answers", return_value=[("invalid", 4, True)] * 2), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            native = training_common.evaluate_after_training(
+                final, {"backend": "transformers"}, model=Mock(), tokenizer=self.tokenizer,
+                dataset=dataset, data_info=info, disable_tqdm=True)
+            self.assertEqual(native["generation"]["batch_size"], 4)
+            self.assertFalse(native["generation"]["auto_batch_size"])
+            # The second path parses the exact command that replaces the training process.
+            # Use a separate destination so it generates rather than reusing the native progress.
+            vllm_final = self.root / "vllm-run/final"
+            with patch.object(evaluation, "read_source", return_value=(vllm_final, metadata, None)), \
+                    patch.object(training_common.os, "execv", side_effect=execute):
+                training_common.exec_final_evaluation(vllm_final, generation_backend="vllm")
+        report = json.loads(next((vllm_final.parent / "evaluations").glob("*.json")).read_text())
+        self.assertEqual(report["generation"]["batch_size"], 64)
+        self.assertFalse(report["generation"]["auto_batch_size"])
 
     def test_config_default_and_explicit_native_override(self):
         settings = generation.load_generation_config(Path(__file__).parents[1] / "configs/generation.yaml")
