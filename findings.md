@@ -2,14 +2,14 @@
 
 ## 项目整理调查（2026-11-06）
 
-- 第一轮答复：业务目录改用 `utils/`；训练结束自动评测也三级；缺密钥在三级开始前交互输入。执行阶段顺序、终端或桌面输入形式尚待确认。
+- 用户两轮答复已确认：业务目录 `utils/`，全量一级 → 全量二级 → 统一三级，训练结束自动评测也三级，缺密钥在三级开始前终端隐藏输入；不保留 `--input`，原命令自动找各级进度追加。
 - 自动进度发现本来就在 evaluate 中：按来源/数据/题数或 `--output` 算报告路径，再读同名 `.progress.jsonl`。只有独立 rescore 要求 `--input`；整合不应将其变为续跑前提。
 - 输入只应发生在恢复进度后仍有待请求的三级题时。当前 APIJudge 每题读取环境变量、没有交互输入；源码无 GUI 框架。os.execv 保留既有标准输入连接，不保证后台启动具备终端。
 
 - 代码事实和需求澄清统一记录在 [项目整理需求](docs/project-layout.md)。`evaluate_checkpoint.py:17` 间接导入 `sample_checkpoint.generate_answers`，实际函数位于 `generation.py:109`；不依赖随机抽样 CLI。
 - `training_workflow.py` 无 CLI。SFT 与 DPO/GRPO 两个入口之间存在共用模型加载函数的反向依赖，可在统一入口实施时下沉到业务共用模块。
-- 生成 JSONL 以已保存条数定位；重评 JSONL 以 index 读取判决；index 是验证集顺序中的原数据集索引，不能按数值最大值推进。现有独立重评逐题串联二三级，需要用户确认是否改为全量阶段屏障。
-- 缺 API 密钥当前计为已处理的待复核；训练结束会调用统一评测。三级整合的缺凭据与自动触发语义需要明确。
+- 生成 JSONL 以已保存条数定位；重评 JSONL 以 index 读取判决；index 是验证集顺序中的原数据集索引，不能按数值最大值推进。现有独立重评逐题串联二三级，目标改为各级全量结束后进入下一级。
+- 旧实现缺 API 密钥会计为已处理的待复核。目标改成三级前输入；取消/空输入/无终端保留进度并退出，未请求题不写为待复核。训练结束调用的同一评测也执行三级。
 - 根部模块使用 `__file__` 定位配置、默认输出与评测入口；迁入目录时需保持仓库根定位。legacy worker 及测试导入要随重构同步调整，旧数据依赖边界不应因普通移文件被打破。
 - 远程 main/1cf99db 已合入 PR51；新需求分支为 `codex/project-layout-requirements`。本次查询仅 #33 仍 open，后续不重复查询。
 
@@ -34,8 +34,8 @@ SFT checkpoint与final都可准备，缓存放在来源运行的prepared-sft/。
 
 未重复GPU vLLM/GRPO短测，因为此次只更改数据准备控制；承接代码的GPU微型证据保存在归档中，不冒充4B性能或显存结果。
 
-## Git
+## 旧 SFT 自动准备的交付记录
 
-main基点ebbe9ca（用户合入PR50），分支codex/implicit-sft-migration，普通合并7215c05完整承接PR49。日常写操作走受控入口，历史只追加。PR49未由Codex合并或关闭；新功能PR将包含其完整实现。
+旧功能分支 codex/implicit-sft-migration 从 PR50/main 基点 ebbe9ca 开始，普通合并 7215c05 完整承接 PR49；其 PR51 已由用户合入 main/1cf99db，结束开发。本任务使用前述独立需求分支；日常写操作走受控入口，历史只追加。
 
 未提交研究docs/research/math-equivalence-and-sft-loss.md保留、不混入。旧历史见Git既有提交及docs/planning-archive/2026-11-06-pre-migration/。
