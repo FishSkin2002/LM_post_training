@@ -1,4 +1,17 @@
-# 当前计划：兼容环境沿用 Conda 渠道并评估 CUDA 数据处理
+# 当前计划：补齐旧兼容环境的 SOCKS 代理依赖
+
+用户于 2026-11-06 报告旧兼容环境因缺少 socksio 导致 HTTPX SOCKS 代理初始化失败，要求将该依赖加入旧环境。
+
+| 本轮工作 | 状态 | 完成条件 |
+| --- | --- | --- |
+| 依赖修复 | complete | 已添加 httpx[socks]==0.28.1、socksio==1.0.0，并将两包纳入固定配置检查。 |
+| 验证与交付 | complete | SOCKS 同步/异步构造及 19 项迁移检查通过，9bbb015 已推送并创建 PR61。 |
+
+PR60 已通过提交关系确认合入 main/56e55d3；本轮从该点创建 codex/legacy-data-socks-proxy。既有数据、训练设置及用户研究文件保持各自原状。
+
+本轮已交付 [PR61](https://github.com/FishSkin2002/LM_post_training/pull/61)。服务器现有旧兼容环境可用 pip 单独补装 HTTPX SOCKS extra；等待用户审查及后续指令。
+
+## 已完成：兼容环境沿用 Conda 渠道并评估 CUDA 数据处理
 
 用户于 2026-11-06 要求删除自动创建旧 SFT 兼容环境时强制指定的 Conda 渠道，并评估 CUDA 是否能加速该数据处理流程；仅在有加速依据时改用 CUDA 版 PyTorch。
 

@@ -1,5 +1,15 @@
 # 当前进展
 
+## 2026-11-06：补齐旧兼容环境的 SOCKS 代理依赖
+
+- 用户报告 HTTPX 使用 SOCKS 代理时缺少 socksio，要求补充旧兼容环境依赖。
+- 受控 fetch、一次 open 列表查询及提交关系确认 PR60 已合入 main/56e55d3；从最新主线创建 codex/legacy-data-socks-proxy，继续使用既有规划与文档记录技能。
+- 已确认 requirements.txt 没有 HTTPX SOCKS extra；兼容环境身份摘要包含 profile 与依赖清单字节，新增依赖后会使用新的受管环境身份，不直接改写旧环境或已发布数据缓存。
+- 先用本地 HTTPX 0.28.1、缺少 socksio 的环境复现用户原始 ImportError；随后在 legacy/sft_data/requirements.txt 添加 httpx[socks]==0.28.1、socksio==1.0.0，profile.json 同步检查两包版本，原历史依赖记录保持原样。
+- 验证下载首次因沙箱 DNS 限制失败，正式审批后仅将 socksio 安装到 /tmp/qwen-legacy-socks-validation，不修改主环境。真实 HTTPX 同步和异步客户端在 socks5、socks5h 代理变量下均能初始化，未发送网络请求。
+- 现有 19 项迁移检查通过（1.236s），日志 /tmp/qwen-legacy-socks-migration-tests.log；git diff --check 通过。当前服务器已创建环境可单独执行 pip 安装 HTTPX SOCKS extra 后重跑原命令，未声称已远程安装。
+- 依赖修复提交 9bbb015 已正常推送，并创建 [PR61](https://github.com/FishSkin2002/LM_post_training/pull/61)。本轮完成，未更改主训练环境或训练参数。
+
 ## 2026-11-06：兼容环境渠道修复与 CUDA 数据处理评估
 
 - 用户要求删除自动创建兼容环境时的强制 Conda 渠道，并在评估有加速依据时才采用 CUDA 版 PyTorch。
