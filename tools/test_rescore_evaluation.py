@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import utils.answer_judge as api
 import utils.rescoring as rescoring
 import utils.math_scoring as scoring
+import utils.rule_scoring as rules
 
 
 def row(index, *, reference="2", r1=r"\boxed{3}", answer=r"\boxed{4}", truncated=False, correct=None):
@@ -84,7 +85,7 @@ class RescoringTests(unittest.TestCase):
                 row(1, reference="proof", r1=r"\boxed{2}", answer=r"\boxed{2}", truncated=True)]
         self.write_input(rows)
         with patch.object(scoring, "score_answer", side_effect=AssertionError("Saved stage one must not be recomputed")), \
-                patch.object(rescoring, "single_formal_box", side_effect=AssertionError("R1 must not run")), \
+                patch.object(rules, "single_formal_box", side_effect=AssertionError("R1 must not run")), \
                 patch.object(api, "urlopen", side_effect=AssertionError("API must not run")):
             report = self.run_rescoring()
         self.assertEqual([r["correct"] for r in report["predictions"]], [True, False])

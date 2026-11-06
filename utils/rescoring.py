@@ -1,16 +1,17 @@
 """Rescore a completed OpenR1 evaluation JSON without generating answers."""
 
 import argparse
+from copy import deepcopy
 import json
 from pathlib import Path
-import re
 from textwrap import indent
 import time
 
 from tqdm.auto import tqdm
 
 from utils.answer_judge import APIJudge, DEFAULT_CONFIG, PROMPT_VERSION, decode_json, load_judge_config
-from utils.math_scoring import SCORING, boxed_answer, parse_answer, verify
+from utils.math_scoring import SCORING
+from utils.rule_scoring import grade_rules, single_formal_box
 
 PROTOCOL = "openr1-three-stage-v2"
 
@@ -36,56 +37,14 @@ def load_evaluation(path):
     if (not isinstance(metrics, dict) or type(metrics.get("generation_samples")) is not int
             or metrics["generation_samples"] != len(rows)):
         raise ValueError("Input generation_samples must match all saved predictions.")
+    if "rule_scoring" in report and not report["rule_scoring"]["complete"]:
+        raise ValueError("Complete both local rule stages with evaluate_checkpoint.py before API scoring.")
     return report
-
-
-def single_formal_box(text):
-    formal = text.rsplit("</think>", 1)[-1]
-    count = len(re.findall(r"\\boxed\b", formal))
-    if count != 1:
-        return None, "missing_box" if count == 0 else "multiple_boxes"
-    answer = boxed_answer(formal)
-    if answer is None:
-        return None, "empty_or_incomplete_box"
-    if not parse_answer(answer):
-        return None, "unparseable_box"
-    return answer, None
-
-
-def grade_rules(row):
-    stages = {f"stage{i}": {"status": "not_run"} for i in (1, 2, 3)}
-    result = {"correct": None, "decision_stage": 1, "stages": stages}
-    if row["truncated"]:
-        stages["stage1"] = {"status": "failed", "reason": "truncated"}
-        result["correct"] = False
-        return result
-    # Generation has already executed stage one. Use its saved decision.
-    correct = row["correct"]
-    reason = ("saved_reference_pass" if correct else
-              "saved_reference_failure" if row["format_valid"] else "saved_invalid_model_box")
-    stages["stage1"] = {"status": "passed" if correct else "failed", "reason": reason}
-    if correct:
-        result["correct"] = True
-        return result
-    result["decision_stage"] = 2
-    expected, reference_error = single_formal_box(row["reference_answer"])
-    predicted, model_error = single_formal_box(row["answer"])
-    stage2 = {"status": "failed", "reference_box": expected, "model_box": predicted}
-    stages["stage2"] = stage2
-    if reference_error or model_error:
-        stage2["reason"] = "; ".join(
-            f"{side}_{error}" for side, error in (("r1", reference_error), ("model", model_error)) if error)
-    elif verify(parse_answer(expected), parse_answer(predicted), **SCORING["verification"]):
-        stage2.update(status="passed", reason="equivalent")
-        result["correct"] = True
-    else:
-        stage2["reason"] = "different_from_r1"
-    return result
 
 
 def grade_prediction(row, judge, previous=None):
     started = time.perf_counter()
-    result = grade_rules(row)
+    result = deepcopy(row["rule_scoring"]) if "rule_scoring" in row else grade_rules(row)
     if result["correct"] is None:
         api = judge(row)
         if previous:
