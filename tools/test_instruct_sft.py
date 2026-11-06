@@ -30,10 +30,10 @@ import utils.math_data as math_data
 import utils.math_scoring as scoring
 import utils.prepare_sft_data as data
 import utils.training.sft as train_sft
-from utils.training import cli as training_cli
+import train as training_cli
 from utils import arguments
 import utils.training_workflow as workflow
-import utils.evaluation as evaluation
+import evaluate_checkpoint as evaluation
 import utils.generation as generation
 
 # Official Qwen3-4B-Instruct-2507 template, revision cdbee75f17c01a7cc42f958dc650907174af0554.
@@ -647,10 +647,10 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(len(output.with_suffix(".progress.jsonl").read_text().splitlines()), 1)
 
     def test_interruption_skips_evaluation_and_failed_final_evaluation_is_retryable(self):
-        with patch.object(train_sft,"evaluate_checkpoint") as called,self.assertRaises(Interrupted):
+        with patch.object(train_sft,"evaluate_after_training") as called,self.assertRaises(Interrupted):
             self.run_training("stop",trainer=InterruptedTrainer)
         called.assert_not_called()
-        with patch.object(train_sft,"evaluate_checkpoint",side_effect=RuntimeError("evaluation failed")),self.assertRaises(RuntimeError):
+        with patch.object(train_sft,"evaluate_after_training",side_effect=RuntimeError("evaluation failed")),self.assertRaises(RuntimeError):
             self.run_training("failed")
         run=self.root/"failed";weights=(run/"final/adapter_model.safetensors").read_bytes()
         self.evaluate(run/"final")

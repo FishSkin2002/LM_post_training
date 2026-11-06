@@ -9,11 +9,10 @@ from transformers.integrations import TensorBoardCallback
 
 from utils.prepare_sft_data import load_config, load_tokenizer, prepare_dataset, validate_precision
 from utils.math_data import OPENR1
-from utils.evaluation import evaluate_checkpoint
 from utils.training_workflow import WorkflowTrainer, data_plan, new_run, read_source, reserve_directory, save_run
 from utils.generation import load_generation_config
 from utils.prepared_sft_data import ensure_prepared_sft_data, load_prepared_sft_data
-from utils.training.common import load_training_model, save_final
+from train import evaluate_after_training, load_training_model, save_final
 
 
 def train(config_path, *, output_dir=None, resume=None, continue_from=None, additional_epochs=None,
@@ -78,10 +77,9 @@ def train(config_path, *, output_dir=None, resume=None, continue_from=None, addi
         if not math.isfinite(result.training_loss):
             raise RuntimeError("Training loss is not finite.")
         final_dir = save_final(trainer, tokenizer, output_dir)
-        if generation_settings["backend"] == "transformers":
-            evaluate_checkpoint(final_dir, model=trainer.model, tokenizer=tokenizer, dataset=dataset,
-                                disable_tqdm=training_args.disable_tqdm,
-                                generation_config=generation_config, generation_backend="transformers")
+        evaluate_after_training(final_dir, generation_settings, model=trainer.model, tokenizer=tokenizer,
+                                dataset=dataset, disable_tqdm=training_args.disable_tqdm,
+                                generation_config=generation_config)
     finally:
         writer.close()
     return final_dir

@@ -1,5 +1,17 @@
 # 当前实现发现
 
+## PR57 代码整理范围（2026-11-06）
+
+- 用户明确 train.py 保留 CLI 与独立方法调度，evaluate_checkpoint.py 和 rescore_evaluation.py 整体包含自身流程；当前整理集中更新 PR57。
+- DPO/GRPO 分别由 utils/training/dpo.py、grpo.py 实现，共用模型加载、适配器保存、训练器基础行为和运行依赖核验按用户新要求放 train.py；共用数据读取模块保留历史缓存身份。
+- 根评测函数仍供训练结束流程调用，导入根脚本不执行命令行；utils 中旧的 evaluation/rescoring 业务壳不保留。
+- 训练后原生评测和 vLLM 进程替换调用已集中到 train.py；用户确认本轮不接入自动大模型判分，独立三级/汇总新功能仍留后续。
+
+## 训练 CLI 入口整理（2026-11-06）
+
+- 用户最新决定是保留统一 train.py，将 CLI 本身放入根入口；各方法的训练实现继续位于 utils/training，DPO/GRPO 的独立实现拆分属于下一步。
+- train.py 已直接定义 main(argv=None)，保留 __main__ 保护；三个测试模块直接导入根入口。原 utils/training/cli.py 已删除，无兼容转发模块或遗留 Python 导入。
+
 ## PR56 冲突处理（2026-11-06）
 
 - PR55 已合入 main/2b9a636，其中 README 最新标题为“回答正确性判定”；PR56 保留相关约定与术语同步。

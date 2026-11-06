@@ -4,6 +4,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 from unittest.mock import patch
@@ -17,11 +18,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessor, T
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import test_instruct_sft as fixtures
-import utils.evaluation as evaluation
+import evaluate_checkpoint as evaluation
 import utils.math_data as math_data
 import utils.post_training_data as data
-import utils.training.post_sft as training
-from utils.training import cli as training_cli
+import utils.training.dpo as train_dpo
+import utils.training.grpo as train_grpo
+import train as training_cli
 from utils.prepare_sft_data import CONFIG_DIR, SYSTEM_PROMPT, build_prompt
 
 
@@ -54,6 +56,18 @@ class FixedAnswers(LogitsProcessor):
 
 
 class PostSFTTests(unittest.TestCase):
+    def test_training_methods_import_independently(self):
+        root = Path(__file__).resolve().parents[1]
+        for method, other in (("dpo", "grpo"), ("grpo", "dpo")):
+            with self.subTest(method=method):
+                code = (
+                    "import sys; import train; assert 'torch' not in sys.modules; "
+                    f"import utils.training.{method}; "
+                    f"assert 'utils.training.{other}' not in sys.modules"
+                )
+                subprocess.run([sys.executable, "-c", code], cwd=root,
+                               capture_output=True, text=True, check=True)
+
     def setUp(self):
         self.fixture = fixtures.InstructSFTTests()
         self.fixture.setUp()
@@ -142,7 +156,7 @@ class PostSFTTests(unittest.TestCase):
         held_out = [row["question"] for row in sft_report["predictions"]]
         changed_whitespace = " \n ".join(held_out[0].split())
 
-        for stage, base_trainer in (("dpo", training.PreferenceTrainer), ("grpo", training.MathGRPOTrainer)):
+        for stage, base_trainer in (("dpo", train_dpo.PreferenceTrainer), ("grpo", train_grpo.MathGRPOTrainer)):
             with self.subTest(stage=stage):
                 self.check_stage(stage, base_trainer, sft, sft_metadata, original_weights, sft_report, changed_whitespace)
 
@@ -158,6 +172,7 @@ class PostSFTTests(unittest.TestCase):
         self.assertEqual(report["generation"], sft_report["generation"])
 
     def check_stage(self, stage, base_trainer, sft, sft_metadata, original_weights, sft_report, overlap):
+        training = {"dpo": train_dpo, "grpo": train_grpo}[stage]
         trainers = []
 
         class ObserveTrainer(base_trainer):
@@ -209,7 +224,7 @@ class PostSFTTests(unittest.TestCase):
                                "--output-dir", str(continuous.parent)])
             partial = self.root / f"{stage}-resume"
             with patch.object(training, trainer_name, InterruptTrainer), self.assertRaises(fixtures.Interrupted):
-                training.train(stage, path, sft_source=sft, output_dir=partial)
+                training.train(path, sft_source=sft, output_dir=partial)
             self.assertFalse((partial / "final").exists())
             checkpoint = partial / "checkpoint-1"
             self.assertFalse((checkpoint / "ref").exists())
@@ -225,22 +240,22 @@ class PostSFTTests(unittest.TestCase):
                     metadata_path.write_text(json.dumps(old))
                     with patch.object(training, "prepare_dataset") as prepare, \
                             self.assertRaisesRegex(ValueError, "different answer format"):
-                        training.train(stage, path, resume=checkpoint)
+                        training.train(path, resume=checkpoint)
                     prepare.assert_not_called()
                 metadata_path.write_text(original_metadata)
             with patch.object(training, trainer_name, ObserveTrainer):
-                resumed = training.train(stage, path, resume=checkpoint)
+                resumed = training.train(path, resume=checkpoint)
             calls = model_loader.call_count
             with self.assertRaisesRegex(ValueError, "finished SFT"):
-                training.train(stage, path, sft_source=resumed)
+                training.train(path, sft_source=resumed)
             with self.assertRaisesRegex(ValueError, "already has a saved final adapter"):
-                training.train(stage, path, resume=checkpoint)
+                training.train(path, resume=checkpoint)
             self.assertEqual(model_loader.call_count, calls)
             broken = json.loads(metadata_path.read_text())
             broken["source_adapter_sha256"] = "different"
             metadata_path.write_text(json.dumps(broken))
             with self.assertRaisesRegex(ValueError, "source SFT artifact has changed"):
-                training.train(stage, path, resume=checkpoint)
+                training.train(path, resume=checkpoint)
             self.assertEqual(model_loader.call_count, calls)
 
         reference = get_peft_model_state_dict(trainers[-1].model, adapter_name="ref")

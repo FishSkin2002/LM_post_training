@@ -11,7 +11,9 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import test_instruct_sft as fixtures
-from utils import answer_judge, evaluation, math_data, rescoring, rule_scoring
+import evaluate_checkpoint as evaluation
+import rescore_evaluation as rescoring
+from utils import answer_judge, math_data, rule_scoring
 
 
 class RuleEvaluationTests(unittest.TestCase):

@@ -1,4 +1,21 @@
-# 当前计划：完成 PR56 的文档同步
+# 当前计划：PR57 代码整理
+
+用户于 2026-11-06 明确保留统一的 train.py，将参数解析和方法选择放进根入口；随后要求 evaluate_checkpoint.py、rescore_evaluation.py 整体包含各自流程，并将当前代码整理统一提交到仍 open 的 PR57。本轮同时完成已确定的 DPO/GRPO 独立训练实现拆分，公共基础操作继续复用。
+
+| 本轮工作 | 状态 | 完成条件 |
+| --- | --- | --- |
+| 入口迁移 | complete | train.py 直接包含 main/参数解析和调度，原 cli 模块已删除，三个现有测试模块直接导入根入口。 |
+| 评测与判分整体迁回 | complete | 根目录包含完整实现与 CLI，训练和测试引用同步，utils 中旧业务模块已移除。 |
+| DPO/GRPO 独立实现 | complete | 独立模块负责各自配置、Trainer 和训练流程；共用函数与现有结束评测调度位于 train.py。 |
+| 验证与交付 | complete | 完整 88 项微型/离线检查、入口帮助及 62 个本地链接检查通过；e057cf2 已推送到 PR57，标题与说明已匹配完整整理范围。 |
+
+受控 fetch 确认 PR56 已由用户合入 origin/main/7bb1232；从该基点创建 codex/train-entrypoint-cli。用户研究文件保留，不运行真实模型训练或付费 API。
+
+沿用 [PR57](https://github.com/FishSkin2002/LM_post_training/pull/57) 交付本轮整理；用户明确当前代码整理及配套说明一起交付，不另分 PR。独立三级、汇总和训练结束自动编排的新功能仍留后续。
+
+用户随后明确将 common.py 共用函数也放入 train.py，并确认本轮只归拢已有训练结束评测调用，大模型判分的自动接入仍留后续。根入口通过延迟导入依赖和 __main__ 保护支持方法复用，保留独立命令的行为。
+
+## 已完成：PR56 文档同步与冲突处理
 
 用户于 2026-11-06 要求在 PR56 追加提交，解决与 main 的三份规划记录冲突。PR55 已由用户合入 main/2b9a636；本轮在 codex/sync-readme-documentation-requirements 同步该主线，保留双方记录并追加普通合并提交。
 

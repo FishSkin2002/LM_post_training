@@ -18,7 +18,7 @@ from transformers import Qwen3Config, Qwen3ForCausalLM
 
 from utils.generation import VLLMGenerator, validate_vllm_environment
 from utils.prepare_sft_data import build_prompt, messages
-from utils.training.post_sft import MathGRPOTrainer, training_arguments
+from utils.training.grpo import MathGRPOTrainer, training_arguments
 from tools.test_instruct_sft import InstructSFTTests
 
 
@@ -118,7 +118,7 @@ def main():
                             gradient_accumulation_steps=2, num_generations=2, max_completion_length=4,
                             max_steps=2, learning_rate=1e-4, beta=0.001, logging_steps=1,
                             save_strategy="no", disable_tqdm=True)
-            trainer_args = training_arguments("grpo", settings, args.output_dir / "grpo-run", True, tokenizer)
+            trainer_args = training_arguments( settings, args.output_dir / "grpo-run", True, tokenizer)
             trainer = MathGRPOTrainer(model=policy, args=trainer_args, train_dataset=dataset,
                                       processing_class=tokenizer, reward_funcs=synthetic_reward,
                                       run_metadata={"stage": "grpo", "smoke": True})

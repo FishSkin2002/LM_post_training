@@ -18,7 +18,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import utils.answer_judge as api
-import utils.rescoring as rescoring
+import rescore_evaluation as rescoring
 import utils.math_scoring as scoring
 import utils.rule_scoring as rules
 
@@ -378,8 +378,8 @@ class RescoringTests(unittest.TestCase):
                 api.validate_config({**self.config, **patch_config})
         script = Path(rescoring.__file__)
         completed = subprocess.run(
-            [sys.executable, "-c", "import utils.rescoring as rescore_evaluation, sys; assert 'torch' not in sys.modules; rescore_evaluation.main()", "--help"],
-            cwd=script.parents[1], capture_output=True, text=True, check=True)
+            [sys.executable, "-c", "import rescore_evaluation, sys; assert 'torch' not in sys.modules; rescore_evaluation.main()", "--help"],
+            cwd=script.parent, capture_output=True, text=True, check=True)
         self.assertIn("--retry-pending", completed.stdout)
         self.assertIn("--input", completed.stdout)
 
@@ -389,7 +389,7 @@ class RescoringTests(unittest.TestCase):
             row(1, reference=r"\frac{1}{12}", r1=r"\boxed{B}", answer=r"\boxed{B}"),
             row(2, answer=r"\boxed{2}", truncated=True),
         ])
-        command = [sys.executable, str(Path(rescoring.__file__).parents[1] / "rescore_evaluation.py"), "--input", str(self.input),
+        command = [sys.executable, str(Path(rescoring.__file__)), "--input", str(self.input),
                    "--output", str(self.output)]
         for _ in range(2):
             completed = subprocess.run(command, cwd=self.root, env={**os.environ, "ZAI_API_KEY": ""},

@@ -6,7 +6,6 @@ from importlib.metadata import PackageNotFoundError, version
 import json
 import os
 from pathlib import Path
-import sys
 import subprocess
 import time
 
@@ -17,7 +16,7 @@ import yaml
 
 from utils.prepare_sft_data import build_prompt, model_dtype
 from utils.arguments import add_generation_arguments
-from utils.paths import ROOT, GENERATION_CONFIG
+from utils.paths import GENERATION_CONFIG
 
 
 def load_generation_config(path=None, backend=None):
@@ -38,21 +37,6 @@ def load_generation_config(path=None, backend=None):
     return {**settings, "vllm": {"gpu_memory_utilization": fraction,
                                "enforce_eager": options.get("enforce_eager", False),
                                "seed": options.get("seed", 42)}}
-
-
-def exec_final_evaluation(final_dir, generation_config=None, generation_backend=None, prepared_sft_data=None):
-    """Replace the training process so no training CUDA context survives into vLLM."""
-    args = [sys.executable, str(ROOT / "evaluate_checkpoint.py"),
-            "--checkpoint", str(final_dir), "--generation-config", str(generation_config or GENERATION_CONFIG)]
-    if generation_backend:
-        args.extend(["--generation-backend", generation_backend])
-    if prepared_sft_data:
-        args.extend(["--prepared-sft-data", str(prepared_sft_data)])
-    print(f"Starting saved-checkpoint evaluation: {final_dir}", flush=True)
-    try:
-        os.execv(sys.executable, args)
-    except OSError as error:
-        raise RuntimeError(f"Training is saved at {final_dir}; run evaluate_checkpoint.py --checkpoint {final_dir} separately.") from error
 
 
 def package_version(name):
