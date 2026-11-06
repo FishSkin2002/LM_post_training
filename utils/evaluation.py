@@ -13,9 +13,10 @@ from tqdm.auto import tqdm
 from utils.prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer, prepare_dataset,
                               require_model, text_format, validate_precision)
 from utils.math_scoring import SCORING, score_answer
-from utils.math_data import dataset_label
+from utils.math_data import OPENR1, dataset_label
 from utils.generation import add_generation_arguments, create_generator, generate_answers, load_generation_config
 from utils.paths import ROOT
+from utils.rule_scoring import apply_rule_scoring
 from utils.prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 from utils.training_workflow import data_plan, format_metrics, read_source
 
@@ -216,7 +217,11 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         "scoring": SCORING,
         "metrics": metrics, "predictions": predictions,
     }
-    output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        if config["data"]["name"] == OPENR1["name"]:
+            apply_rule_scoring(report, output, disable_tqdm=disable_tqdm)
+    finally:
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(format_metrics(metrics, "Generation evaluation"), flush=True)
     print(f"Saved evaluation report to {output}", flush=True)
     return report

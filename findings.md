@@ -1,5 +1,14 @@
 # 当前实现发现
 
+## 一二级评测接通（2026-11-06）
+
+- 基点 main/33367b2，分支 codex/two-stage-checkpoint-evaluation。当前 evaluate 已直接依赖公共生成；原 rescoring 中 single_formal_box/grade_rules 是不调用 API 的完整本地规则，可直接提取共享。
+- 一级记录中的 correct 保留基础规则判决。二级结果需独立记录，不能覆盖后让旧重评把二级通过误记为一级通过；计划通过 rule_scoring 附入最终 JSON。
+- 数据集 index 非连续；二级按已有索引映射跳过已保存题目，不按最大数值续跑、不复核历史答案。一级生成异常时不开始二级。
+- 输出 `.stage2.progress.jsonl` 和 `.stage2.md`；最终 JSON 的顶层 rule_scoring 记录完成情况，每题同名字段记录本地判决，原 correct/metrics 保留一级含义。二级未确认正确表现为 correct=null 且 stage3=not_run，属于尚未评分，不能计为 API 待复核。
+- 本地结果在 JSONL flush 后即算已保存，Markdown 失败后续跑也跳过旧题，不补写旧 Markdown。二级中断时 JSON 保留部分本地结果；旧 API 重评入口对含未完成二级的报告明确拒绝。
+- 第二步已交付 3949c92/PR54，分支 codex/two-stage-checkpoint-evaluation；完整 87 项与后补定向/边界检查通过。下一步独立三级应读取完成的 rule_scoring，继续复用各题本地判决。
+
 ## 目录整理实施（2026-11-06）
 
 - PR52 已合入 main/3e3b108，功能分支 codex/organize-training-entrypoints。
