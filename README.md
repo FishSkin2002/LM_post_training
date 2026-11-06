@@ -13,8 +13,8 @@
 .
 ├── train.py                     # 训练入口，选择 SFT、DPO 或 GRPO
 ├── evaluate_checkpoint.py       # 生成验证集回答，完成一二级判分
-├── rescore_evaluation.py        # 对已保存回答补充 API 判分
-├── configs/                     # 训练、开发、API 裁判和公共生成配置
+├── rescore_evaluation.py        # 调用在线大模型，为已保存的回答判分
+├── configs/                     # 训练、开发、大模型判分和公共生成配置
 ├── outputs/                     # 运行生成的训练与评测产物
 ├── utils/                       # 训练、数据准备、生成与评分的实现
 ├── tools/                       # 开发工具与测试脚本
@@ -34,10 +34,10 @@
 ### configs 目录
 
 ```text
-configs/                         # 训练、开发、API 裁判和公共生成配置
+configs/                         # 训练、开发、大模型判分和公共生成配置
 ├── training/                    # 正式训练配置
 ├── development/                 # 开发与数据检查配置
-└── evaluation/                  # API 裁判配置
+└── evaluation/                  # 大模型判分配置
 ```
 
 ### outputs 目录
@@ -82,16 +82,16 @@ configs/                         # 训练、开发、API 裁判和公共生成�
         │   └── run.json                 # 最终产物对应的运行信息
         ├── runs/                        # TensorBoard 日志
         │   └── events.out.tfevents.<标识> # 训练与验证曲线的事件文件
-        ├── evaluations/                 # 该运行的生成评测与手动重评
+        ├── evaluations/                 # 生成评测与大模型判分结果
         │   ├── <评测名>.json            # 评测信息、完整回答与一二级判决
         │   ├── <评测名>.progress.jsonl  # 逐题回答与一级判决，用于续跑
         │   ├── <评测名>.md              # 题目、参考解答与模型回答的阅读版
         │   ├── <评测名>.stage2.progress.jsonl # 二级判决，用于续跑
         │   ├── <评测名>.stage2.md       # 二级判决的阅读版
-        │   ├── <评测名>-rescored.json   # 手动 API 重评结果与统计
-        │   ├── <评测名>-rescored.progress.jsonl # 手动重评进度
-        │   ├── <评测名>-rescored.md     # 手动重评的阅读版
-        │   └── <评测名>-rescored.api-review.md # API 判分明细与待复核题目
+        │   ├── <评测名>-rescored.json   # 大模型判分结果与统计
+        │   ├── <评测名>-rescored.progress.jsonl # 大模型判分进度
+        │   ├── <评测名>-rescored.md     # 大模型判分结果的阅读版
+        │   └── <评测名>-rescored.api-review.md # 判分依据与待复核题目
         ├── prepared-sft/                # 读取旧 SFT 产物时自动准备的数据缓存
         │   ├── manifest.json            # 数据来源、准备配置与校验信息
         │   └── dataset/                 # 已准备的数据集
@@ -101,7 +101,7 @@ configs/                         # 训练、开发、API 裁判和公共生成�
         └── .sft-data-migration.lock      # 准备旧 SFT 数据时使用的并发锁
 ```
 
-`<step>` 是断点步数，默认最多保留最近两个断点，每个断点结构如上。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数；`-rescored` 文件仅在手动重评后生成，`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
+`<step>` 是断点步数，默认最多保留最近两个断点，每个断点结构如上。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数；`-rescored` 文件在运行大模型判分后生成，`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
 
 原始模型的评测默认保存在仓库的 `outputs/evaluations/`；开发输出由开发配置指定。新训练和加训遇到重名运行目录时自动加 `-1`、`-2` 等后缀，断点续训沿用原目录。
 
@@ -293,18 +293,18 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/final
 
 ### rescore_evaluation.py
 
-对已保存的 OpenR1 评测回答补充 API 判分，保存重评报告。
+通过 API 调用在线大模型，对已保存的 OpenR1 评测回答进行判分。
 
 #### 准备 API 密钥
 
-在运行重评的终端中输入默认裁判所需的密钥：
+在运行判分命令的终端中输入模型服务所需的密钥：
 
 ```bash
 read -rsp 'GLM API Key: ' ZAI_API_KEY
 export ZAI_API_KEY
 ```
 
-#### 发起重评
+#### 使用大模型判分
 
 ```bash
 python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json
@@ -314,17 +314,17 @@ python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/
 
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | `configs/evaluation/glm-5.3.yaml` | 选择 API 地址、裁判模型与请求设置。 |
+| `--config` | `configs/evaluation/glm-5.3.yaml` | 选择模型服务地址、模型与请求设置。 |
 | `--retry-pending` | 复用已保存的待复核判决 | 重新尝试待复核题。 |
 
-#### 继续重评或重试待复核题
+#### 继续判分或重试待复核题
 
 ```bash
 python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json --retry-pending
 ```
 
-沿用原来的输入和输出路径；不加 `--retry-pending` 时仅继续未处理题，加上后也重试待复核题。缺少密钥时，需要 API 的题会记为待复核。
+沿用原来的输入和输出路径；不加 `--retry-pending` 时仅继续未处理题，加上后也重试待复核题。缺少密钥时，需要大模型判分的题会记为待复核。
 
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | `configs/evaluation/glm-5.3.yaml` | 沿用首次重评的裁判配置。 |
+| `--config` | `configs/evaluation/glm-5.3.yaml` | 沿用首次判分的模型服务配置。 |

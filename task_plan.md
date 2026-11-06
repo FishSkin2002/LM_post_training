@@ -12,6 +12,8 @@
 
 本轮已交付 [PR55](https://github.com/FishSkin2002/LM_post_training/pull/55)。用户已选择下一步拆分 DPO/GRPO 实现，本轮不提前实施。
 
+2026-11-06 补充修正：用户要求准确说明在线大模型 API 判分，并润色措辞。README 统一简写为“大模型判分”，脚本介绍写明“通过 API 调用在线大模型”。相关目录注释、文件说明、用途标题与参数说明已同步，命令示例和链接检查通过；沿用仍 open 的 PR55 交付。
+
 ## 已完成第二步：接通一二级评测
 
 用户确认 PR53 已合入并要求继续。受控 fetch 确认远程 main/33367b2 包含该 PR；从最新 main 创建 `codex/two-stage-checkpoint-evaluation`。本轮只将第二级规则接入评测，保留各级进度追加与旧结果复用，手动评测不调用 API 或汇总。

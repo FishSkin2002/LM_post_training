@@ -2,6 +2,7 @@
 
 ## README 核查（2026-11-06）
 
+- 最新用语：README 简写“大模型判分”，在首次介绍中说明通过 API 调用在线大模型。目录和文件注释描述判分用途，命令用法单独说明如何启动或继续。
 - 根部入口为 train.py、evaluate_checkpoint.py、rescore_evaluation.py。DPO/GRPO 是互斥子命令，各自从 SFT 来源加载并独立运行；post_sft.py 仍通过 stage 分支组织两种算法，代码拆分留待下一步。
 - configs 的子目录只有 training、development、evaluation；公共 generation.yaml 位于 configs 根部。根目录总览及 configs 分树均按用户指定只介绍文件夹层级。
 - 本地没有 outputs/training；训练机路径来自 configs/training/sft.yaml，README 的 training 树按保存代码构造示例。训练结束保存 final 与根级 trainer_state；checkpoint 另含优化器、调度器和随机状态；TensorBoard 事件直接位于 runs。
