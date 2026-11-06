@@ -16,11 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from peft import LoraConfig, get_peft_model
 
-import utils.evaluation as evaluation
+import evaluate_checkpoint as evaluation
 from legacy.sft_data import migration
 import utils.training.sft as train_sft
 import train as training_cli
-import utils.training.post_sft as train_post_sft
+import utils.training.dpo as train_dpo
+import utils.training.grpo as train_grpo
 from utils.prepared_sft_data import (load_prepared_sft_data, ensure_prepared_sft_data,
                                resolve_prepared_sft_data, save_prepared_sft_data)
 from utils.training_workflow import data_plan, new_run, save_run
@@ -106,17 +107,18 @@ class MigrationTests(unittest.TestCase):
             pass
         expected = self.dataset.select(self.metadata["data"]["validation_indices"])["question"]
         for stage in ("dpo", "grpo"):
+            training = {"dpo": train_dpo, "grpo": train_grpo}[stage]
             source = self.root / stage / "source" / "final"
             shutil.copytree(self.source, source)
             with self.subTest(stage=stage), \
                     patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
                     patch.object(migration, "run_child", side_effect=self.export), \
-                    patch.object(train_post_sft, "load_stage_config", return_value=({"trainer": {}, "data": {}, "output_dir": "unused"}, 2048)), \
-                    patch.object(train_post_sft, "training_arguments", return_value=SimpleNamespace(use_vllm=False)), \
-                    patch.object(train_post_sft, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
-                    patch.object(train_post_sft, "prepare_post_training_data", side_effect=PreparedHeldOut) as prepare:
+                    patch.object(training, "load_config", return_value=({"trainer": {}, "data": {}, "output_dir": "unused"}, 2048)), \
+                    patch.object(training, "training_arguments", return_value=SimpleNamespace(use_vllm=False)), \
+                    patch.object(training, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
+                    patch.object(training, "prepare_post_training_data", side_effect=PreparedHeldOut) as prepare:
                 with self.assertRaises(PreparedHeldOut):
-                    train_post_sft.train(stage, "unused", sft_source=source)
+                    training.train( "unused", sft_source=source)
                 self.assertEqual(prepare.call_args.args[3], expected)
                 self.assertTrue((source.parent / "prepared-sft" / "manifest.json").is_file())
 
@@ -152,13 +154,14 @@ class MigrationTests(unittest.TestCase):
         class PreparedHeldOut(Exception):
             pass
         for stage in ("dpo", "grpo"):
+            training = {"dpo": train_dpo, "grpo": train_grpo}[stage]
             with self.subTest(stage=stage):
-                with patch.object(train_post_sft, "load_stage_config", return_value=({"trainer": {}, "data": {}, "output_dir": "unused"}, 2048)), \
-                        patch.object(train_post_sft, "training_arguments", return_value=SimpleNamespace(use_vllm=False)), \
-                        patch.object(train_post_sft, "prepare_dataset", side_effect=AssertionError("must use cache")), \
-                        patch.object(train_post_sft, "prepare_post_training_data", side_effect=PreparedHeldOut) as prepare:
+                with patch.object(training, "load_config", return_value=({"trainer": {}, "data": {}, "output_dir": "unused"}, 2048)), \
+                        patch.object(training, "training_arguments", return_value=SimpleNamespace(use_vllm=False)), \
+                        patch.object(training, "prepare_dataset", side_effect=AssertionError("must use cache")), \
+                        patch.object(training, "prepare_post_training_data", side_effect=PreparedHeldOut) as prepare:
                     with self.assertRaises(PreparedHeldOut):
-                        train_post_sft.train(stage, "unused", sft_source=self.source)
+                        training.train( "unused", sft_source=self.source)
                 self.assertEqual(prepare.call_args.args[3], expected)
                 post = self.root / stage / "final"
                 shutil.copytree(self.source, post)

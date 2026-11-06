@@ -13,8 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 
 import utils.generation as generation
-import utils.training.post_sft as train_post_sft
-import utils.evaluation as evaluation
+import utils.training.grpo as train_grpo
+import train as training_common
+import evaluate_checkpoint as evaluation
 from utils.prepare_sft_data import load_tokenizer
 from utils.prepared_sft_data import load_prepared_sft_data, save_prepared_sft_data
 from utils.training_workflow import data_plan
@@ -128,18 +129,18 @@ class GenerationTests(unittest.TestCase):
 
     def test_training_resume_keeps_the_saved_runtime(self):
         versions = {"trl": "0.27.2", "vllm": "0.10.2"}
-        with patch.object(train_post_sft, "package_version", side_effect=versions.get):
-            train_post_sft.require_resume_engine({"generation_engine": {"trl_version": "0.27.2",
+        with patch.object(generation, "package_version", side_effect=versions.get):
+            training_common.require_resume_engine({"generation_engine": {"trl_version": "0.27.2",
                                                                          "vllm_version": "0.10.2", "backend": "vllm"}})
             for engine in (None, {"trl_version": "1.16.0", "backend": "transformers"},
                            {"trl_version": "0.27.2", "vllm_version": "0.22.0", "backend": "vllm"}):
                 with self.assertRaises(ValueError):
-                    train_post_sft.require_resume_engine({"generation_engine": engine})
+                    training_common.require_resume_engine({"generation_engine": engine})
 
     def test_training_handoff_replaces_process_with_saved_final(self):
         final = self.root / "final"
-        with patch.object(generation.os, "execv") as execute:
-            generation.exec_final_evaluation(final, generation_backend="vllm", prepared_sft_data=self.root / "prepared")
+        with patch.object(training_common.os, "execv") as execute:
+            training_common.exec_final_evaluation(final, generation_backend="vllm", prepared_sft_data=self.root / "prepared")
         executable, args = execute.call_args.args
         self.assertEqual(executable, sys.executable)
         self.assertIn(str(final), args)
@@ -194,10 +195,10 @@ class GenerationTests(unittest.TestCase):
     def test_grpo_translates_generation_parameters_and_keeps_native_for_old_config(self):
         common = dict(num_generations=2, max_completion_length=4, per_device_train_batch_size=1,
                       gradient_accumulation_steps=2, use_cpu=True)
-        native = train_post_sft.training_arguments("grpo", common, self.root, False, self.tokenizer)
+        native = train_grpo.training_arguments( common, self.root, False, self.tokenizer)
         self.assertFalse(native.use_vllm)
         self.assertTrue(native.generation_kwargs["use_cache"])
-        accelerated = train_post_sft.training_arguments("grpo", {**common, "use_vllm": True},
+        accelerated = train_grpo.training_arguments( {**common, "use_vllm": True},
                                                          self.root, False, self.tokenizer)
         self.assertEqual(accelerated.vllm_mode, "colocate")
         self.assertNotIn("use_cache", accelerated.generation_kwargs)

@@ -46,7 +46,7 @@ def make_fixture(root):
 
 def smoke(root, conda_exe):
     import torch
-    import utils.evaluation as evaluation
+    import evaluate_checkpoint as evaluation
     import utils.generation as generation
     from legacy.sft_data import migration
     from utils.prepare_sft_data import load_tokenizer
