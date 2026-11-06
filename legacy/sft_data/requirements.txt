@@ -5,6 +5,8 @@
 torch==2.6.0+cpu
 tokenizers==0.23.3
 huggingface-hub==2.3.0
+httpx[socks]==0.28.1
+socksio==1.0.0
 dill==0.4.1
 pyarrow==26.0.0
 xxhash==4.0.2

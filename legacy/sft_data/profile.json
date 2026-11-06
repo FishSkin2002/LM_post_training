@@ -12,6 +12,8 @@
   "packages": {
     "torch": "2.6.0+cpu",
     "huggingface-hub": "2.3.0",
+    "httpx": "0.28.1",
+    "socksio": "1.0.0",
     "numpy": "2.5.2",
     "sympy": "1.13.1",
     "fsspec": "2026.7.0",

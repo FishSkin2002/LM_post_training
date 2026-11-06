@@ -1,5 +1,12 @@
 # 当前实现发现
 
+## 旧兼容环境 SOCKS 依赖（2026-11-06）
+
+- HTTPX 的 SOCKS 支持是可选依赖，官方安装方式为 httpx[socks]：[HTTPX 代理说明](https://www.python-httpx.org/advanced/proxies/#socks)。当前主环境 HTTPX 为 0.28.1 且缺少 socksio，可用不联网的客户端构造复现相同报错。
+- 兼容环境依赖与版本检查分别位于 legacy/sft_data/requirements.txt 和 profile.json；compatibility_key 同时摘要两份依赖清单及 profile。添加依赖后自动准备会选择新受管环境，已有有效 prepared-sft 缓存仍直接复用。
+- HTTPX 0.28.1 的已安装元数据声明 SOCKS extra 依赖 socksio==1.*；本轮固定 socksio==1.0.0，并将 HTTPX 与 socksio 纳入兼容环境版本检查，避免完成标记漏检缺包。
+- 无 socksio 时客户端构造复现原始 ImportError。将实际 socksio wheel 安装到隔离临时目录后，socks5 和 socks5h 环境变量下的同步、异步 HTTPX 客户端全部初始化成功，未发网络请求；不存在完整代理连通性或训练通过的实测结论。
+
 ## 兼容环境渠道与 CUDA 数据处理（2026-11-06）
 
 - 用户已明确要求自动创建兼容环境沿用其现有 Conda 渠道配置；这覆盖此前内部创建命令强制使用 conda-forge 的实现选择。
