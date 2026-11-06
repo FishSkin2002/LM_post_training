@@ -8,6 +8,7 @@
 - 已将 CLI 解析和方法调度原样放入 train.py，保留 main(argv=None) 及 __main__ 保护，删除 utils/training/cli.py；三个测试模块改为直接导入 train。
 - 验证通过：SFT/DPO/GRPO 训练、恢复、加训、评测及旧数据准备的现有 51 项微型/离线检查；四组帮助输出和缺少 DPO 来源时的退出行为逐字一致，CLI 主体 AST 一致，无遗留 Python 导入，git diff --check 正常。日志 /tmp/qwen-train-cli-tests.log。
 - 模型、数据、参数语义和训练实现未改；DPO/GRPO 独立实现拆分仍为下一步，未启动真实训练或付费 API。
+- 功能已提交 11318c8 并正常推送，创建 [PR57](https://github.com/FishSkin2002/LM_post_training/pull/57)。本轮训练入口调整完成，等待用户继续后推进 DPO/GRPO 独立实现。
 
 ## 2026-11-06：解决 PR56 的规划记录冲突
 

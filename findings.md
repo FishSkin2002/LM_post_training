@@ -3,7 +3,7 @@
 ## 训练 CLI 入口整理（2026-11-06）
 
 - 用户最新决定是保留统一 train.py，将 CLI 本身放入根入口；各方法的训练实现继续位于 utils/training，DPO/GRPO 的独立实现拆分属于下一步。
-- 旧 utils.training.cli 仅由 train.py 和三个测试模块使用；移动 main(argv=None) 并保留 __main__ 保护即可直接导入根入口，不新增兼容转发模块。
+- train.py 已直接定义 main(argv=None)，保留 __main__ 保护；三个测试模块直接导入根入口。原 utils/training/cli.py 已删除，无兼容转发模块或遗留 Python 导入。
 
 ## PR56 冲突处理（2026-11-06）
 
