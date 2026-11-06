@@ -10,9 +10,9 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 import transformers
 from datasets.fingerprint import Hasher
 
-from math_data import OPENR1, clean_answer, load_math_data
+from utils.math_data import OPENR1, clean_answer, load_math_data
+from utils.paths import CONFIG_DIR
 
-CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 IGNORE_INDEX = -100
 MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
 SYSTEM_PROMPT = ("Solve the following math problem step by step.\n"

@@ -159,16 +159,16 @@ def ensure_compatibility_environment(profile, conda_exe=None):
 
 
 def checked_cache(target, metadata, tokenizer):
-    from prepared_sft_data import load_prepared_sft_data
-    from training_workflow import data_plan
+    from utils.prepared_sft_data import load_prepared_sft_data
+    from utils.training_workflow import data_plan
     dataset, info = load_prepared_sft_data(target, metadata["config"], tokenizer)
     data_plan(dataset, metadata, info)
     return target
 
 
 def migrate_sft(source, *, conda_exe=None):
-    from prepare_sft_data import load_tokenizer
-    from training_workflow import read_source
+    from utils.prepare_sft_data import load_tokenizer
+    from utils.training_workflow import read_source
     source, metadata, _ = read_source(source)
     if metadata.get("stage", "sft") != "sft":
         raise ValueError("Legacy data preparation requires an SFT artifact.")

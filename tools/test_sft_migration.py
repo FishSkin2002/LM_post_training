@@ -16,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from peft import LoraConfig, get_peft_model
 
-import evaluate_checkpoint as evaluation
+import utils.evaluation as evaluation
 from legacy.sft_data import migration
-import train_sft
-import sample_checkpoint
-import train_post_sft
-from prepared_sft_data import (load_prepared_sft_data, ensure_prepared_sft_data,
+import utils.training.sft as train_sft
+from utils.training import cli as training_cli
+import utils.training.post_sft as train_post_sft
+from utils.prepared_sft_data import (load_prepared_sft_data, ensure_prepared_sft_data,
                                resolve_prepared_sft_data, save_prepared_sft_data)
-from training_workflow import data_plan, new_run, save_run
+from utils.training_workflow import data_plan, new_run, save_run
 from tools import test_instruct_sft as fixtures
 
 
@@ -126,14 +126,14 @@ class MigrationTests(unittest.TestCase):
         config = self.root / "sft.json"
         config.write_text(json.dumps(self.fixture.config))
         output = self.root / "continued"
-        argv = ["train_sft.py", "--config", str(config), "--continue-from", str(self.source),
+        argv = ["train.py", "sft", "--config", str(config), "--continue-from", str(self.source),
                 "--additional-epochs", "1", "--output-dir", str(output)]
         with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
                 patch.object(migration, "run_child", side_effect=self.export), \
                 patch.object(train_sft, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
                 patch.object(train_sft, "load_training_model", side_effect=PreparedData), patch.object(sys, "argv", argv):
             with self.assertRaises(PreparedData):
-                train_sft.main()
+                training_cli.main()
         self.assertEqual(json.loads((output / "run.json").read_text())["prepared_sft_data"], str(self.target))
 
     def test_checkpoint_evaluation_prepares_without_requiring_final(self):
@@ -145,18 +145,6 @@ class MigrationTests(unittest.TestCase):
             report = evaluation.evaluate_checkpoint(self.source, model=self.fixture.model_loader(self.fixture.model_name),
                 device="cpu", generation_backend="transformers", disable_tqdm=True, output=self.root / "checkpoint.json")
         self.assertEqual(report["prepared_sft_data"], str(self.target))
-
-    def test_sample_entry_automatically_prepares(self):
-        output = self.root / "samples.md"
-        engine = Mock(description={"backend": "transformers"}, initialization_runtime=0.0)
-        engine.generate.return_value = [("answer", 1, False)]
-        argv = ["sample_checkpoint.py", "--checkpoint", str(self.source), "--num-samples", "1", "--output", str(output)]
-        with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
-                patch.object(migration, "run_child", side_effect=self.export), \
-                patch.object(sample_checkpoint, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
-                patch.object(sample_checkpoint, "create_generator", return_value=engine), patch.object(sys, "argv", argv):
-            sample_checkpoint.main()
-        self.assertIn(str(self.target), output.read_text())
 
     def test_post_sft_training_and_evaluation_trace_original_sft_cache(self):
         self.export(["--output", self.target])

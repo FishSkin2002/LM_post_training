@@ -15,9 +15,9 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from peft import PeftModel
 import yaml
 
-from prepare_sft_data import CONFIG_DIR, build_prompt, model_dtype
-
-GENERATION_CONFIG = CONFIG_DIR / "generation.yaml"
+from utils.prepare_sft_data import build_prompt, model_dtype
+from utils.arguments import add_generation_arguments
+from utils.paths import ROOT, GENERATION_CONFIG
 
 
 def load_generation_config(path=None, backend=None):
@@ -40,16 +40,9 @@ def load_generation_config(path=None, backend=None):
                                "seed": options.get("seed", 42)}}
 
 
-def add_generation_arguments(parser):
-    parser.add_argument("--generation-config", type=Path, default=GENERATION_CONFIG,
-                        help="Shared generation settings (default: configs/generation.yaml).")
-    parser.add_argument("--generation-backend", choices=("vllm", "transformers"),
-                        help="Override the configured generation backend; never falls back automatically.")
-
-
 def exec_final_evaluation(final_dir, generation_config=None, generation_backend=None, prepared_sft_data=None):
     """Replace the training process so no training CUDA context survives into vLLM."""
-    args = [sys.executable, str(Path(__file__).with_name("evaluate_checkpoint.py")),
+    args = [sys.executable, str(ROOT / "evaluate_checkpoint.py"),
             "--checkpoint", str(final_dir), "--generation-config", str(generation_config or GENERATION_CONFIG)]
     if generation_backend:
         args.extend(["--generation-backend", generation_backend])

@@ -2,7 +2,7 @@
 
 import json
 
-from generation import validate_vllm_environment
+from utils.generation import validate_vllm_environment
 
 
 if __name__ == "__main__":

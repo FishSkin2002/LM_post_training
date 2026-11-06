@@ -13,7 +13,9 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent / "configs/evaluation/glm-5.3.yaml"
+from utils.paths import CONFIG_DIR
+
+DEFAULT_CONFIG = CONFIG_DIR / "evaluation/glm-5.3.yaml"
 PROMPT_VERSION = "math-final-answer-v1"
 JUDGE_PROMPT = """You are a mathematical final-answer validator.
 The user supplies JSON data containing a problem, the dataset reference answer,

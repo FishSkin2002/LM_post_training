@@ -3,12 +3,17 @@
 from collections import Counter
 import json
 import re
+import sys
 
 from datasets import Features, List, Value, load_dataset
 from datasets.fingerprint import Hasher
 
-from math_scoring import SCORING, boxed_answer, parse_answer, score_answer
-from prepare_sft_data import SYSTEM_PROMPT, messages
+from utils.math_scoring import SCORING, boxed_answer, parse_answer, score_answer
+from utils.prepare_sft_data import SYSTEM_PROMPT, messages
+
+# Preserve datasets' serialized transform identity for saved DPO/GRPO plans.
+sys.modules["post_training_data"] = sys.modules[__name__]
+__name__ = "post_training_data"
 
 DPO_ANSWER_FORMAT = "boxed-v2"
 ANSWER_HEADING = re.compile(r"^# Answer[ \t]*\r?$", re.MULTILINE)

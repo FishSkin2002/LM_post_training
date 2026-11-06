@@ -12,12 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-import generation
-import train_post_sft
-import evaluate_checkpoint as evaluation
-from prepare_sft_data import load_tokenizer
-from prepared_sft_data import load_prepared_sft_data, save_prepared_sft_data
-from training_workflow import data_plan
+import utils.generation as generation
+import utils.training.post_sft as train_post_sft
+import utils.evaluation as evaluation
+from utils.prepare_sft_data import load_tokenizer
+from utils.prepared_sft_data import load_prepared_sft_data, save_prepared_sft_data
+from utils.training_workflow import data_plan
 from tools import test_instruct_sft as fixtures
 
 
