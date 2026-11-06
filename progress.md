@@ -11,6 +11,7 @@
 - 验证：tools.test_sft_migration 的 19 项离线检查通过（1.293s），日志 /tmp/qwen-legacy-conda-migration-tests.log。临时审计脚本还通过实际创建函数捕获命令，确认沿用渠道且继续调用 pip。
 - 在主环境 torch 2.8.0+cu128 中运行相同数据准备、划分及导出/读取代码，20 条合成记录的 TorchDispatch 张量运算、CUDA 初始化及 CUDA 转移均为 0，输出记录及划分一致。日志 /tmp/qwen-legacy-channel-cuda-audit.log；这属于执行路径核查，未比较 A800 上 CPU/CUDA 版本耗时，不声称测出加速倍数。
 - git diff --check 通过；本轮只改渠道创建命令和三份规划记录，不新增实现镜像测试、不安装真实环境、不启动训练。
+- 实现提交 cd3b57a 已经受控入口正常提交和推送，并创建 [PR60](https://github.com/FishSkin2002/LM_post_training/pull/60)。本轮渠道修复与 CUDA 评估完成；后续优化或训练参数改动等待用户继续。
 
 ## 2026-11-06：实现按生成引擎区分评测批次
 

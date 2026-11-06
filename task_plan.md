@@ -6,9 +6,11 @@
 | --- | --- | --- |
 | 渠道修复 | complete | 已删除强制渠道参数，命名环境创建沿用现有配置，pip 安装流程保留。 |
 | CUDA 评估 | complete | 代码链和设备核查均无 CUDA 数值运算，保留 CPU 兼容环境；不把微型检查当 A800 计时。 |
-| 验证与交付 | in_progress | 19 项迁移检查及渠道/设备核查通过，待正常提交、推送并创建 PR。 |
+| 验证与交付 | complete | 19 项迁移检查及渠道/设备核查通过，cd3b57a 已推送并创建 PR60。 |
 
 PR59 已通过提交关系确认合入 main/ef9c99e；本轮从该点创建 codex/legacy-data-conda-channels。保留未跟踪研究文件，本轮不修改 GRPO 长度或补全数量，不启动真实训练。
+
+本轮已交付 [PR60](https://github.com/FishSkin2002/LM_post_training/pull/60)。当前兼容流程没有 CUDA 运算路径，保留 CPU 版 PyTorch；待用户审查及后续指令。
 
 ## 已完成：实现按生成引擎区分评测批次
 
