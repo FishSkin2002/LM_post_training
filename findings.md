@@ -1,5 +1,24 @@
 # 当前实现发现
 
+## README 相关文档审计（2026-11-06）
+
+- README 的最新展示要求应集中在 docs/readme-writing.md；AGENTS 已有准确入口，不需要重复细则。规则需覆盖目录深度、脚本范围、独立方法用法、简短展示、环境占位符和纯文字报告入口。
+- docs/project-layout.md 仍允许算法共处模块，与下一步拆分 DPO/GRPO 的已确认决定冲突；应改为独立实现目标，当前代码仍共处 utils/training/post_sft.py。
+- docs/automatic-sft-migration.md 仍有“唯一的正常安装入口”和具名环境示例，应同步简洁表述。程序内部 CPU 兼容环境的明确安装来源是实际约定，用户安装示例不指定渠道不改变该行为。
+- DPO/GRPO 共用同一次 SFT 起点和固定评测题是实验对照条件，保留；方法运行互不依赖。判分方式称“大模型判分”，API 仍用于描述通信、密钥和请求细节；单独启动与训练后自动启动的真实边界保留。
+- 模型、训练和评分详细约定承担技术规范职责，README 删掉的长说明不转存成新文档。历史报告、研究记录和规划归档保留其历史语境。
+- 当前根部业务入口为 train.py、evaluate_checkpoint.py、rescore_evaluation.py；DPO/GRPO 仍共处 post_sft.py。四入口和独立算法模块属于正式目标，待后续实施；下方旧调查中出现的旧入口与分支状态保留为历史记录。
+
+| 关联文档 | 本轮处理 |
+| --- | --- |
+| docs/readme-writing.md | 集中记录本轮全部展示要求，供以后修改 README 时读取。 |
+| docs/project-layout.md、docs/post-training-workflow.md、docs/qwen3-base.md | 明确两种独立方法及独立训练实现目标，保留实验对照条件。 |
+| docs/training-workflow.md、docs/evaluation-rescoring.md、docs/vllm-generation.md | 同步大模型判分用语，保留评分规则、生成配置及调用边界。 |
+| docs/automatic-sft-migration.md | 同步环境占位符、主环境依赖和旧数据自动准备表述，保留内部兼容环境规则。 |
+| CONTEXT.md | 新增大模型判分定义，删除 GRPO 定义中重复的跨方法实验条件。 |
+| AGENTS.md、docs/project-goals.md | 已有入口和独立方法目标一致，无需重复新增规则。 |
+| docs/research/、docs/planning-archive/、reports/ | 核查其历史语境；既有记录保留，未跟踪研究文件排除。 |
+
 ## 一二级评测接通（2026-11-06）
 
 - 基点 main/33367b2，分支 codex/two-stage-checkpoint-evaluation。当前 evaluate 已直接依赖公共生成；原 rescoring 中 single_formal_box/grade_rules 是不调用 API 的完整本地规则，可直接提取共享。
