@@ -2,8 +2,7 @@
 
 以学习为目的的大语言模型数学推理后训练项目，主要学习 LoRA SFT、DPO、GRPO。
 
-> [!TIP]
-> **[📊 查看实验报告目录 →](reports/)**
+> **实验报告：[查看目录](reports/)**
 >
 > [实验一：GSM8K 上的 Qwen3-4B-Base LoRA SFT](reports/exp1/report.md)
 
