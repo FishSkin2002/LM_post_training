@@ -8,6 +8,7 @@
 - legacy worker 保留独立执行与依赖边界，只更新 utils 导入；API 重评模块保持不导入训练依赖。随机抽样专属测试随功能删除，共享生成边界检查保留。
 - datasets 的 raw.map/filter 指纹包含可调用对象的模块身份，单纯搬 math_data/post_training_data 会影响旧来源恢复。数据转换保留原序列化名称，代码与公共导入仍放 utils/；不改变指纹检查或跳过旧来源校验。
 - 主环境与旧 CPU 环境已各自对照 main/3e3b108：OpenR1、GSM8K、DPO、GRPO 的完整记录、词元、来源、指纹和已有划分不变。保留历史序列化模块名是兼容旧 run 的必要行为，不是供用户执行的旧入口；后续整理时不能简单移除此处兼容。
+- 目录/统一训练第一步已交付 ab900f0/PR53，分支 codex/organize-training-entrypoints。根部当前为 train.py、evaluate_checkpoint.py 和暂保留的 rescore_evaluation.py；评分三级/汇总新入口待下一步实现。
 
 ## 项目整理调查（2026-11-06）
 

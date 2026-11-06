@@ -13,6 +13,7 @@
 - 证据：/tmp/qwen-layout-tests.log、/tmp/qwen-layout-identity.log、/tmp/qwen-layout-data-identity.json；额外增加已保存指纹恢复的回归检查。CLI 帮助及互斥参数在仓库外使用标准库 Python 验证通过，无需加载训练依赖。
 - 新增指纹回归在主环境和旧 CPU 环境各通过 1 项（主环境累计 81 项）；评测、重评的根部薄入口在仓库外 `--help` 通过，数据检查模块 CLI、全部源码语法及 8 个本地 Markdown 链接检查通过。
 - 暂存后差异检查发现三个新文件多余 EOF 空行，已清理；本轮只归拢代码、统一训练和删除随机抽样，评分拆分尚未实施。README 明确现阶段可用命令，原重评暂保留根部薄入口。
+- 第一阶段功能提交 ab900f0 已正常推送，创建 [PR53](https://github.com/FishSkin2002/LM_post_training/pull/53)。第一步已完成；等待用户继续后，实施一二级整合、独立三级及汇总，不自动跨步骤执行。研究文件未纳入提交。
 
 ## 2026-11-06：独立三级与汇总参数已确认
 
