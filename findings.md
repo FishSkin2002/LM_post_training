@@ -1,5 +1,19 @@
 # 当前实现发现
 
+## README 核查（2026-11-06）
+
+- 用户明确 README 当前不使用 emoji；需要醒目标识时使用纯文字、加粗与普通引用块。
+- “回答正确性判定”与聊天格式使用同级标题，介绍判断模型回答是否正确的方法；一级对原参考终值，二级对所选 R1 正式作答的单框，第三级统称大模型判分。截断直接判错、无法明确判定时待复核。
+- 输出示例最新展示规则：checkpoint-<step>/ 收起为一行用途注释，final/ 展开到文件。
+- 环境示例使用 `<环境名>` 占位符，由读者替换；基础安装命令不强制指定 Conda 渠道。
+- 最新用语：README 简写“大模型判分”，在首次介绍中说明通过 API 调用在线大模型。目录和文件注释描述判分用途，命令用法单独说明如何启动或继续。
+- 根部入口为 train.py、evaluate_checkpoint.py、rescore_evaluation.py。DPO/GRPO 是互斥子命令，各自从 SFT 来源加载并独立运行；post_sft.py 仍通过 stage 分支组织两种算法，代码拆分留待下一步。
+- configs 的子目录只有 training、development、evaluation；公共 generation.yaml 位于 configs 根部。根目录总览及 configs 分树均按用户指定只介绍文件夹层级。
+- 本地没有 outputs/training；训练机路径来自 configs/training/sft.yaml，README 的 training 树按保存代码构造示例。训练结束保存 final 与根级 trainer_state；checkpoint 另含优化器、调度器和随机状态；TensorBoard 事件直接位于 runs。
+- prepared-sft 仅在不兼容旧 SFT 来源缺少缓存时自动准备；数据缓存含 manifest.json 及 dataset 的 Arrow/元数据。相关入口首次读取时可能自动创建 CPU 兼容 Conda 环境，新 SFT 正常准备不建该环境。
+- evaluate 现保存五类文件：JSON、一级 JSONL/Markdown、二级 JSONL/Markdown；手动 rescore 另保存四类文件。当前训练结束只自动执行一二级，README 不应提前声称独立三级及汇总已实现。
+- 主环境 Transformers 4.57.6 的分词器保存逻辑还包含 special_tokens_map.json，Qwen2 fast tokenizer 默认可保存 vocab.json/merges.txt；不能照旧 TF5 产物漏列这些文件。
+
 ## 一二级评测接通（2026-11-06）
 
 - 基点 main/33367b2，分支 codex/two-stage-checkpoint-evaluation。当前 evaluate 已直接依赖公共生成；原 rescoring 中 single_formal_box/grade_rules 是不调用 API 的完整本地规则，可直接提取共享。
