@@ -6,13 +6,15 @@
 | --- | --- | --- |
 | 相关文档审计 | complete | 两个只读调查确认 README 编写约定、算法组织和环境措辞存在冲突，领域规则无待裁定分歧。 |
 | 同步正式约定 | complete | 9 份约定/术语已同步；展示规则集中进入 readme-writing，算法独立性、环境示例与大模型判分用语保持一致。 |
-| 一致性验证与交付 | in_progress | 两份只读复核通过；16 份文档/参考文件的 61 个本地链接检查正常，待提交并创建独立要求 PR。 |
+| 一致性验证与交付 | complete | 两份只读复核、16 份文档/参考文件的 61 个本地链接及差异检查通过；b74e7fe 已推送并创建独立要求 PR56。 |
 
 本轮从最新 origin/main/7d45fa1 创建 `codex/sync-readme-documentation-requirements`。README 展示改动保留在仍 open 的 [PR55](https://github.com/FishSkin2002/LM_post_training/pull/55)，本轮按 Git 约定单独交付要求文档。对照副本为 `/tmp/qwen-approved-readme-reference.md`。未跟踪研究文件、历史报告与规划归档保留。
 
 已确认范围：根部目录逐项注释且不展开文件夹；configs 仅文件夹；training 产物示例展开文件但 checkpoint 收起、final 展开；仅根部脚本一句简介及用途命令和必要参数；DPO/GRPO 分别说明；聊天格式仅展示；同级三级判分简介不指定模型；醒目的报告入口使用纯文字；Conda 使用 `<环境名>` 且不强制渠道；多余说明直接从 README 删除，不另建文档承接。
 
 本轮不实施 DPO/GRPO 代码拆分；将其目标写入正式约定，待用户继续后推进。独立三级、汇总和训练结束编排也保持原有后续步骤。
+
+本轮已交付 [PR56](https://github.com/FishSkin2002/LM_post_training/pull/56)，README 展示仍由 PR55 交付。后续实现先由用户合入相关要求，再按用户继续指令从最新 main 开始。
 
 ## 已完成第二步：接通一二级评测
 
