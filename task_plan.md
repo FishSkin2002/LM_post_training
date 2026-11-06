@@ -1,4 +1,18 @@
-# 当前计划：PR57 代码整理
+# 当前计划：按生成引擎区分评测批次
+
+用户于 2026-11-06 确认 vLLM 评测使用固定分块，默认每次提交 64 题，可用 --batch-size 调整；自动增减仅用于 Transformers。本轮按 Git 工作约定只交付要求，用户合入后再实现并同步 README。
+
+| 本轮工作 | 状态 | 完成条件 |
+| --- | --- | --- |
+| 核对与决定 | complete | 两份只读调查核对代码和文档，用户已确认 vLLM 默认 64。 |
+| 同步要求 | complete | training-workflow 与 vllm-generation 已区分两种引擎，明确默认值、参数冲突及失败/续跑行为。 |
+| 验证与交付 | complete | 差异与 17 个本地链接检查通过，要求已提交 1fe5409 并交付 PR58；本轮未改运行代码。 |
+
+PR57 已由用户合入 origin/main/1305f0f；从该基点创建 codex/backend-evaluation-batch-policy，旧代码分支结束开发。保留用户未跟踪的研究文件。后续功能步骤覆盖独立评测与训练结束评测；独立三级、汇总和自动大模型判分仍留原计划后续。
+
+本轮已交付 [PR58](https://github.com/FishSkin2002/LM_post_training/pull/58)。按 Git 工作约定，待用户合入要求并说“继续”后，从最新 main 开始功能实现及 README 同步。
+
+## 已完成：PR57 代码整理
 
 用户于 2026-11-06 明确保留统一的 train.py，将参数解析和方法选择放进根入口；随后要求 evaluate_checkpoint.py、rescore_evaluation.py 整体包含各自流程，并将当前代码整理统一提交到仍 open 的 PR57。本轮同时完成已确定的 DPO/GRPO 独立训练实现拆分，公共基础操作继续复用。
 

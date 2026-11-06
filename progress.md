@@ -1,5 +1,14 @@
 # 当前进展
 
+## 2026-11-06：按生成引擎区分评测批次要求
+
+- 用户确认自动增减对 vLLM 内部调度帮助有限，选择默认每次固定提交 64 题，可用 --batch-size 调整；Transformers 保留原默认 4 和可选自适应。
+- 继续使用 grill-with-docs、planning-with-files-zh 和 writing-for-agents；两个只读调查核对调用边界及相关文档。vLLM 搭配自适应开关明确报参数不兼容，固定分块生成失败退出并保留已保存进度。
+- 受控 fetch 与一次 open 列表查询确认 PR57 不再 open，提交关系确认其完整历史已合入 main/1305f0f；从该基点创建独立要求分支 codex/backend-evaluation-batch-policy。
+- 修改 training-workflow 和 vllm-generation 的目标要求及验收；本轮保留运行代码和 README 当前用法，待要求合入后另做功能实现。未跟踪研究文件和历史归档保持。
+- 五份变更文档的 17 个本地文件/章节链接、单一当前计划和 git diff --check 检查通过；代码与 README 无差异。本轮只验证文档，不运行模型训练、生成或付费 API。
+- 要求提交 1fe5409 已正常推送并创建 [PR58](https://github.com/FishSkin2002/LM_post_training/pull/58)。本轮要求整理完成，用户合入后再做功能步骤；PR57 的已合入分支不继续追加提交。
+
 ## 2026-11-06：扩大 PR57 的代码整理范围
 
 - 用户要求评测和判分两个根目录脚本整体保留实现，当前代码整理统一更新 PR57；同时完成此前已确定的 DPO/GRPO 独立实现。
