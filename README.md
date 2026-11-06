@@ -119,11 +119,11 @@ End your response with the final answer in \boxed{...}, for example \boxed{4}.<|
 
 ## 环境准备
 
-在支持 BF16 的 CUDA 设备上创建环境并安装依赖；`qwen-vllm` 可替换为自己的环境名。
+在支持 BF16 的 CUDA 设备上创建环境并安装依赖，先在两处空引号内填写相同的环境名。
 
 ```bash
-conda create -n qwen-vllm --override-channels -c conda-forge python=3.12 pip -y
-conda activate qwen-vllm
+conda create -n "" --override-channels -c conda-forge python=3.12 pip -y
+conda activate ""
 python -m pip install -r requirements.txt
 ```
 
