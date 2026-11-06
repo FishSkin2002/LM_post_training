@@ -1,5 +1,17 @@
 # 当前进展
 
+## 2026-11-06：兼容环境渠道修复与 CUDA 数据处理评估
+
+- 用户要求删除自动创建兼容环境时的强制 Conda 渠道，并在评估有加速依据时才采用 CUDA 版 PyTorch。
+- 使用 planning-with-files-zh 和 writing-for-agents 维护本轮计划及证据。受控 fetch 与一次 open 列表查询确认 PR59 不再 open；提交关系确认其历史已合入 main/ef9c99e，从最新主线创建 codex/legacy-data-conda-channels。
+- 已定位强制渠道来自 legacy/sft_data/migration.py 的创建命令；后续项目依赖仍由兼容环境的 Python 调用 pip 安装。
+- 初步核对 worker 只检查环境并调用现有数据准备和缓存导出，不加载模型权重；继续检查分词、数学解析、Arrow 处理及设备调用。
+- 删除创建命令中的 --override-channels -c conda-forge；Conda 继续创建命名环境并安装 Python/pip，兼容依赖继续由 pip 安装。此次不改变已有兼容配置、旧数据身份或训练参数。
+- 已完成代码链及官方设备语义核对：当前文本解析、分词、筛选、划分和缓存读写没有 CUDA 数值计算，单纯换 CUDA wheel 没有 GPU 加速路径。因此保留 CPU 版兼容 PyTorch；主环境的 CUDA 训练依赖保持其既有用途。
+- 验证：tools.test_sft_migration 的 19 项离线检查通过（1.293s），日志 /tmp/qwen-legacy-conda-migration-tests.log。临时审计脚本还通过实际创建函数捕获命令，确认沿用渠道且继续调用 pip。
+- 在主环境 torch 2.8.0+cu128 中运行相同数据准备、划分及导出/读取代码，20 条合成记录的 TorchDispatch 张量运算、CUDA 初始化及 CUDA 转移均为 0，输出记录及划分一致。日志 /tmp/qwen-legacy-channel-cuda-audit.log；这属于执行路径核查，未比较 A800 上 CPU/CUDA 版本耗时，不声称测出加速倍数。
+- git diff --check 通过；本轮只改渠道创建命令和三份规划记录，不新增实现镜像测试、不安装真实环境、不启动训练。
+
 ## 2026-11-06：实现按生成引擎区分评测批次
 
 - 用户表示要求已处理并继续。受控 start 获取 main/a87d28a，提交关系确认 PR58 完整历史已合入；创建 codex/backend-evaluation-batches。

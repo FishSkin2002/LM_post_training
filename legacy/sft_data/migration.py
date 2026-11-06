@@ -131,8 +131,7 @@ def ensure_compatibility_environment(profile, conda_exe=None):
         if prefix is None:
             write_state(state, {**identity, "state": "creating"})
             print(f"Creating CPU compatibility environment with Conda: {name}", flush=True)
-            run_child([conda, "create", "-n", name, "--override-channels", "-c", "conda-forge",
-                       "python=3.12", "pip", "-y"])
+            run_child([conda, "create", "-n", name, "python=3.12", "pip", "-y"])
             prefix = named_prefix(conda_info(conda), name)
             if prefix is None:
                 raise ValueError(f"Conda did not report the newly created environment {name}.")
