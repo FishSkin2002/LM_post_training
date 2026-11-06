@@ -17,7 +17,7 @@
 - 指纹仍为4e255131893486f9，验证索引[19,5]；全部题目、监督/参考、来源/组、token IDs/labels逐条相等；SFT产物字节未变。完成续跑在禁止Conda/旧子进程/生成器/评分器的检查下通过，JSONL与Markdown字节未变。
 - 日志/tmp/qwen-named-migration-smoke.log；结果/tmp/qwen-named-migration-fixture/migration-result.json；/tmp仅存合成测试数据和日志，兼容环境不在/tmp。
 
-功能PR待提交。未更改主环境、系统Toolkit或真实SFT产物；未调用付费API。此前独立入口方案仅为PR49旧实现，当前已被本轮流程替换。
+功能已提交435f3d6并推送，PR #51：https://github.com/FishSkin2002/LM_post_training/pull/51；等待用户审查合入。未更改主环境、系统Toolkit或真实SFT产物；未调用付费API。此前独立入口方案仅为PR49旧实现，当前已被本轮流程替换。
 
 ## 历史
 

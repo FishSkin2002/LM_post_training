@@ -24,7 +24,7 @@ PR #50已合入main/ebbe9ca。已从最新远程main创建codex/implicit-sft-mig
 | 原入口自动调用 | complete | 新SFT/兼容来源/缓存正常路径，旧来源首次准备后继续原任务。 |
 | 标准Conda环境 | complete | -n创建、Conda查询解释器、pip安装，标记/锁/恢复/用户环境保护。 |
 | 针对性验证 | complete | 20迁移边界检查+45微型检查；实际原评测入口创建全新命名环境、准备旧数据并生成。 |
-| 文档与交付 | in_progress | README和规划更新、差异检查，提交推送新功能PR。 |
+| 文档与交付 | complete | README和规划更新、差异检查，提交推送新功能PR。 |
 
 未提交docs/research/math-equivalence-and-sft-loss.md继续保留并排除提交。本轮不跑真实4B训练、全量数据处理或付费API。
 
@@ -34,4 +34,4 @@ PR #50已合入main/ebbe9ca。已从最新远程main创建codex/implicit-sft-mig
 
 ## 本轮交付
 
-功能开发和验收完成，待提交推送新功能PR。PR49的代码和历史已经承接，新PR将包含完整vLLM功能及按PR50修正后的入口流程；PR的合并或关闭仍由用户操作。
+功能与验收已完成，提交435f3d6并推送，PR #51：https://github.com/FishSkin2002/LM_post_training/pull/51。该PR包含PR49完整vLLM实现及按PR50修正后的流程，无需再合入旧PR49；合并/关闭由用户操作。
