@@ -10,7 +10,7 @@
 
 本轮从最新 origin/main/7d45fa1 创建 `codex/sync-readme-documentation-requirements`。README 展示改动保留在仍 open 的 [PR55](https://github.com/FishSkin2002/LM_post_training/pull/55)，本轮按 Git 约定单独交付要求文档。对照副本为 `/tmp/qwen-approved-readme-reference.md`。未跟踪研究文件、历史报告与规划归档保留。
 
-已确认范围：根部目录逐项注释且不展开文件夹；configs 仅文件夹；training 产物示例展开文件但 checkpoint 收起、final 展开；仅根部脚本一句简介及用途命令和必要参数；DPO/GRPO 分别说明；聊天格式仅展示；同级三级判分简介不指定模型；醒目的报告入口使用纯文字；Conda 使用 `<环境名>` 且不强制渠道；多余说明直接从 README 删除，不另建文档承接。
+已确认范围：根部目录逐项注释且不展开文件夹；configs 仅文件夹；training 产物示例展开文件但 checkpoint 收起、final 展开；仅根部脚本一句简介及用途命令和必要参数；DPO/GRPO 分别说明；聊天格式仅展示；同级“回答正确性判定”简介不指定判分模型；醒目的报告入口使用纯文字；Conda 使用 `<环境名>` 且不强制渠道；多余说明直接从 README 删除，不另建文档承接。
 
 本轮不实施 DPO/GRPO 代码拆分；将其目标写入正式约定，待用户继续后推进。独立三级、汇总和训练结束编排也保持原有后续步骤。
 
