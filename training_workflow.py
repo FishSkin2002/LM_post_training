@@ -113,9 +113,11 @@ def read_source(path, config=None, *, resume=False):
 
 
 def new_run(config, plan, epochs, source_path=None):
+    from prepared_sft_data import data_environment
     return {
         "config": deepcopy(config), "data": plan, "epochs": epochs, "text_format": deepcopy(plan["source"]["text_format"]),
         "scoring": deepcopy(SCORING), "source_adapter": str(source_path) if source_path else None,
+        "data_environment": data_environment(),
     }
 
 

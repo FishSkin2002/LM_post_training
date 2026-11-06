@@ -14,7 +14,8 @@ from prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer,
 from training_workflow import read_source
 from math_data import dataset_label
 from generation import (add_generation_arguments, create_generator, generate_answers, load_generation_config)
-from prepared_sft_data import add_prepared_data_argument, load_prepared_sft_data
+from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
+                               require_data_environment, resolve_prepared_sft_data)
 
 
 def generate_answer(model, tokenizer, question, max_new_tokens):
@@ -41,12 +42,14 @@ def main():
         if args.checkpoint:
             args.checkpoint, metadata, _ = read_source(args.checkpoint)
             args.prepared_sft_data = args.prepared_sft_data or metadata.get("prepared_sft_data")
+            data_source = metadata.get("source_adapter") if metadata.get("stage") in ("dpo", "grpo") else args.checkpoint
             metadata = metadata.get("evaluation", metadata)
             config = metadata["config"]
             model_name = config["model_name"]
             label = f"lora-{args.checkpoint.parent.name}-{args.checkpoint.name}"
         else:
             metadata = None
+            data_source = None
             config = load_config(args.config)
             model_name = args.model_name
             require_model(model_name)
@@ -63,6 +66,8 @@ def main():
         tokenizer = load_tokenizer(args.checkpoint or model_name, local_files_only=local_only)
         if metadata and text_format(tokenizer) != metadata["text_format"]:
             raise ValueError("Source tokenizer template differs.")
+        args.prepared_sft_data = resolve_prepared_sft_data(data_source, args.prepared_sft_data)
+        require_data_environment(metadata, data_source, args.prepared_sft_data)
         dataset, info = (load_prepared_sft_data(args.prepared_sft_data, config, tokenizer) if args.prepared_sft_data
                          else prepare_dataset(config, tokenizer))
         if metadata:
@@ -80,6 +85,7 @@ def main():
     indices = random.Random(args.seed).sample(range(len(dataset)), args.num_samples)
     report = ["# 数学样本问答\n", f"- Model：`{model_name}`\n- 来源：`{args.checkpoint or model_name}`\n"
               f"- 数据：`{config['data']}`\n- 抽题种子：{args.seed}；索引：{indices}\n"
+              f"- 准备数据缓存：`{args.prepared_sft_data}`\n"
               f"- 贪心生成；max_new_tokens：{budget}；BF16：{config.get('bf16', False)}\n"
               f"- 生成引擎：`{generator.description}`；初始化：{generator.initialization_runtime:.3f} s\n"]
     try:

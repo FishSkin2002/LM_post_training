@@ -26,7 +26,8 @@ from training_workflow import (TerminalPrinterCallback, TerminalProgressCallback
                                read_source, reserve_directory, save_run)
 from generation import (add_generation_arguments, exec_final_evaluation, load_generation_config,
                         package_version)
-from prepared_sft_data import add_prepared_data_argument, load_prepared_sft_data
+from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
+                               require_data_environment, resolve_prepared_sft_data)
 
 
 class PostSFTTrainer:
@@ -143,6 +144,8 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None,
     if sft.get("stage", "sft") != "sft" or sft_source.name != "final":
         raise ValueError("Use the final/ adapter from a finished SFT run.")
     evaluation = {key: sft[key] for key in ("config", "data", "text_format")}
+    if "data_environment" in sft:
+        evaluation["data_environment"] = sft["data_environment"]
     with (sft_source / "adapter_model.safetensors").open("rb") as weights:
         source_hash = hashlib.file_digest(weights, "sha256").hexdigest()
     if saved is not None and (evaluation != saved["evaluation"] or source_hash != saved["source_adapter_sha256"]):
@@ -165,6 +168,8 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None,
             args.vllm_max_model_length = required_context
         if args.vllm_max_model_length < required_context:
             raise ValueError("vllm_max_model_length cannot be smaller than prompt plus completion budgets.")
+    prepared_sft_data = resolve_prepared_sft_data(sft_source, prepared_sft_data, sft.get("prepared_sft_data"))
+    require_data_environment(sft, sft_source, prepared_sft_data)
     sft_data, sft_info = (load_prepared_sft_data(prepared_sft_data, sft_config, tokenizer) if prepared_sft_data
                          else prepare_dataset(sft_config, tokenizer))
     plan = data_plan(sft_data, sft, sft_info)

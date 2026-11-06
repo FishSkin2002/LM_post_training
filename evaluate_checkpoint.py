@@ -16,7 +16,8 @@ from math_scoring import SCORING, score_answer
 from math_data import dataset_label
 from sample_checkpoint import generate_answers
 from generation import add_generation_arguments, create_generator, load_generation_config
-from prepared_sft_data import add_prepared_data_argument, load_prepared_sft_data
+from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
+                               require_data_environment, resolve_prepared_sft_data)
 from training_workflow import data_plan, format_metrics, read_source
 
 DEFAULT_BATCH_SIZE = 4
@@ -84,7 +85,11 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     if metadata and text_format(tokenizer) != metadata["text_format"]:
         raise ValueError("Source tokenizer template differs.")
     source_type = "lora" if checkpoint is not None else "original"
+    data_source = sft_source or checkpoint
+    prepared_sft_data = resolve_prepared_sft_data(data_source, prepared_sft_data,
+                                                  metadata.get("prepared_sft_data") if metadata else None)
     if dataset is None:
+        require_data_environment(metadata, data_source, prepared_sft_data)
         dataset, data_info = (load_prepared_sft_data(prepared_sft_data, config, tokenizer) if prepared_sft_data
                               else prepare_dataset(config, tokenizer))
     elif data_info is None and metadata is not None:
@@ -202,6 +207,7 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         "source_type": source_type, "stage": stage, "model_name": model_name,
         "checkpoint": str(checkpoint) if checkpoint is not None else None,
         "sft_source": str(sft_source) if sft_source is not None else None,
+        "prepared_sft_data": str(prepared_sft_data) if prepared_sft_data else None,
         "data": {"source": plan["source"], "split": "validation", "indices": indices,
                  "fingerprint": plan["fingerprint"], "split_seed": plan["split_seed"]},
         "text_format": text_format(tokenizer), "precision": "bf16" if config.get("bf16") else "fp32",

@@ -77,7 +77,7 @@ def validate_vllm_environment(training=False):
     for package, required in expected.items():
         installed = package_version(package)
         if installed is None or installed.split("+")[0] != required:
-            raise ValueError(f"vLLM requires the qwen-vllm environment: {package}=={required}, found {installed}.")
+            raise ValueError(f"vLLM requires the main dependency stack: {package}=={required}, found {installed}.")
     if not torch.cuda.is_available() or torch.version.cuda is None:
         raise ValueError("vLLM requires an available CUDA GPU.")
     cuda_version = tuple(int(part) for part in torch.version.cuda.split(".")[:2])

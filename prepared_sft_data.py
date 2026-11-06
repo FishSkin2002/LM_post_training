@@ -1,12 +1,39 @@
 """Transfer verified prepared SFT data between environments without rebuilding its identity."""
 
-import argparse
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 from datasets import load_from_disk
 
-from prepare_sft_data import load_tokenizer, prepare_dataset, text_format
+from prepare_sft_data import text_format
+
+
+def data_environment():
+    return {name: version(name) for name in ("datasets", "transformers", "tokenizers", "dill", "pyarrow", "xxhash")}
+
+
+def resolve_prepared_sft_data(source, explicit=None, saved=None):
+    """Resolve a cache without invoking Conda, subprocesses or package installation."""
+    if explicit or saved:
+        return Path(explicit or saved).expanduser().resolve()
+    if source is not None:
+        candidate = Path(source).expanduser().resolve().parent / "prepared-sft"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def require_data_environment(metadata, source, prepared=None):
+    if metadata is None or prepared is not None:
+        return
+    saved = metadata.get("data_environment")
+    # Unmarked artifacts were produced by the original datasets 5.1.0 stack.
+    compatible = saved == data_environment() if saved else version("datasets") == "5.1.0"
+    if not compatible:
+        final = Path(source).expanduser().resolve().parent / "final"
+        raise ValueError("This SFT artifact needs a one-time data migration. Run from the main environment: "
+                         f'python migrate_sft.py --sft-source "{final}"')
 
 
 def tokenizer_backend(tokenizer):
@@ -51,28 +78,4 @@ def load_prepared_sft_data(path, config, tokenizer):
 
 def add_prepared_data_argument(parser):
     parser.add_argument("--prepared-sft-data", type=Path,
-                        help="Prepared SFT data exported in the original environment; preserves old data fingerprints.")
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sft-source", type=Path, required=True, help="Existing SFT final/ artifact.")
-    parser.add_argument("--output", type=Path, required=True, help="New directory for the transferable data cache.")
-    args = parser.parse_args()
-    from training_workflow import data_plan, read_source
-    try:
-        source, metadata, _ = read_source(args.sft_source)
-        if metadata.get("stage", "sft") != "sft" or source.name != "final":
-            raise ValueError("Export requires the original SFT final/ artifact.")
-        config = metadata["config"]
-        tokenizer = load_tokenizer(source, local_files_only=True)
-        dataset, info = prepare_dataset(config, tokenizer)
-        data_plan(dataset, metadata, info)
-        target = save_prepared_sft_data(args.output, dataset, info, config, tokenizer)
-    except (OSError, ValueError, KeyError) as error:
-        parser.error(str(error))
-    print(f"Exported verified SFT data: {target}", flush=True)
-
-
-if __name__ == "__main__":
-    main()
+                        help="Override the prepared SFT cache; default: discover prepared-sft/ next to the source final/.")

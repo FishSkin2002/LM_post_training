@@ -15,6 +15,8 @@ from math_data import OPENR1
 from evaluate_checkpoint import evaluate_checkpoint
 from training_workflow import WorkflowTrainer, data_plan, new_run, read_source, reserve_directory, save_run
 from generation import add_generation_arguments, exec_final_evaluation, load_generation_config
+from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
+                               require_data_environment, resolve_prepared_sft_data)
 
 
 def load_training_model(config, source_path=None):
@@ -41,6 +43,7 @@ def main():
     source.add_argument("--continue-from", type=Path, help="Start a new stage from a saved adapter.")
     parser.add_argument("--additional-epochs", type=float, help="Extra epochs in the new stage; requires --continue-from.")
     add_generation_arguments(parser)
+    add_prepared_data_argument(parser)
     args = parser.parse_args()
     config = load_config(args.config)
     generation_settings = load_generation_config(args.generation_config, args.generation_backend)
@@ -59,7 +62,11 @@ def main():
         device = "cpu" if config.get("use_cpu") else ("cuda" if torch.cuda.is_available() else "cpu")
         validate_precision(config, device)
         tokenizer = load_tokenizer(source_path or config["model_name"], local_files_only=bool(source_path))
-        dataset, data_info = prepare_dataset(config, tokenizer)
+        prepared = resolve_prepared_sft_data(source_path, args.prepared_sft_data,
+                                             metadata.get("prepared_sft_data") if metadata else None)
+        require_data_environment(metadata, source_path, prepared)
+        dataset, data_info = (load_prepared_sft_data(prepared, config, tokenizer) if prepared
+                              else prepare_dataset(config, tokenizer))
         plan = data_plan(dataset, metadata, data_info)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
@@ -70,7 +77,12 @@ def main():
     else:
         output_dir = reserve_directory(args.output_dir or config["output_dir"])
         epochs = args.additional_epochs if args.continue_from else config["num_train_epochs"]
+        source_environment = metadata.get("data_environment") if metadata else None
         metadata = new_run(config, plan, epochs, source_path)
+        if prepared and source_path:
+            metadata["data_environment"] = source_environment
+    if prepared:
+        metadata["prepared_sft_data"] = str(prepared)
     save_run(output_dir, metadata)
     settings = {key: value for key, value in config.items() if key not in ("model_name", "lora", "output_dir", "data", "max_length", "max_new_tokens")}
     settings["num_train_epochs"] = metadata["epochs"]
