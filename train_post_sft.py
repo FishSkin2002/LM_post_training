@@ -15,6 +15,8 @@ from transformers.trainer import TRAINING_ARGS_NAME
 from transformers.trainer_callback import PrinterCallback, ProgressCallback
 from trl import DPOConfig, DPOTrainer, GRPOConfig, GRPOTrainer
 import yaml
+from packaging.version import Version
+import trl
 
 from evaluate_checkpoint import evaluate_checkpoint
 from post_training_data import DPO_ANSWER_FORMAT, SOURCES, boxed_reward, prepare_post_training_data
@@ -22,6 +24,10 @@ from prepare_sft_data import CONFIG_DIR, load_tokenizer, prepare_dataset, valida
 from train_sft import load_training_model
 from training_workflow import (TerminalPrinterCallback, TerminalProgressCallback, data_plan,
                                read_source, reserve_directory, save_run)
+from generation import (add_generation_arguments, exec_final_evaluation, load_generation_config,
+                        package_version)
+from prepared_sft_data import (add_prepared_data_argument, load_prepared_sft_data,
+                               require_data_environment, resolve_prepared_sft_data)
 
 
 class PostSFTTrainer:
@@ -45,11 +51,26 @@ class PostSFTTrainer:
 class PreferenceTrainer(PostSFTTrainer, DPOTrainer):
     def _prepare_dataset(self, dataset, processing_class, args, dataset_name):
         # The pinned TRL text collator accepts these IDs without re-rendering an EOS suffix.
+        if Version(trl.__version__) < Version("1.0"):
+            return dataset.rename_columns({key + "_ids": key + "_input_ids"
+                                            for key in ("prompt", "chosen", "rejected")})
         return dataset
 
 
 class MathGRPOTrainer(PostSFTTrainer, GRPOTrainer):
     pass
+
+
+def require_resume_engine(saved):
+    engine = saved.get("generation_engine")
+    if engine is None:
+        if package_version("trl") != "1.16.0":
+            raise ValueError("This legacy checkpoint requires its original TRL 1.16.0 environment; start a new run from SFT final/ to change environments.")
+        return
+    if engine["trl_version"] != package_version("trl"):
+        raise ValueError("Resume requires the saved TRL version; use the original environment.")
+    if engine["backend"] == "vllm" and engine["vllm_version"] != package_version("vllm"):
+        raise ValueError("Resume requires the saved vLLM version; use the original environment.")
 
 
 def load_stage_config(path, stage):
@@ -69,6 +90,7 @@ def load_stage_config(path, stage):
 
 
 def training_arguments(stage, settings, output_dir, bf16, tokenizer):
+    settings = dict(settings)
     common = dict(output_dir=str(output_dir), bf16=bf16, logging_first_step=True,
                   report_to="none", eval_strategy="no", gradient_checkpointing=True,
                   gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -77,23 +99,37 @@ def training_arguments(stage, settings, output_dir, bf16, tokenizer):
     if type(settings["max_completion_length"]) is not int or settings["max_completion_length"] <= 0:
         raise ValueError("max_completion_length must be a positive integer.")
     # The native EOS is the only terminator. Suppress PAD so TRL's clipped ratio uses the same boundary.
+    use_vllm = settings.get("use_vllm", False)  # Old saved configurations used native generation.
+    if type(use_vllm) is not bool:
+        raise ValueError("trainer.use_vllm must be boolean.")
+    if use_vllm:
+        if settings.get("vllm_mode", "colocate") != "colocate" or settings.get("vllm_tensor_parallel_size", 1) != 1:
+            raise ValueError("GRPO supports single-GPU vLLM colocate mode only.")
+        settings.setdefault("vllm_mode", "colocate")
+        generation_kwargs = {"ignore_eos": True, "stop_token_ids": [tokenizer.eos_token_id],
+                             "bad_words": [tokenizer.pad_token]}
+    else:
+        generation_kwargs = {"use_cache": True, "suppress_tokens": [tokenizer.pad_token_id]}
     args = GRPOConfig(**settings, **common, loss_type="grpo", scale_rewards="group", disable_dropout=True,
-                      use_vllm=False, remove_unused_columns=False,
-                      generation_kwargs={"use_cache": True, "suppress_tokens": [tokenizer.pad_token_id]})
+                      remove_unused_columns=False, generation_kwargs=generation_kwargs)
     rollout_steps = args.steps_per_generation * args.num_iterations
     if args.gradient_accumulation_steps % rollout_steps:
         raise ValueError("Each GRPO optimizer step must contain whole rollout cycles for checkpoint resume.")
     return args
 
 
-def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None):
+def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None,
+          generation_config=None, generation_backend=None, prepared_sft_data=None):
     config, length_limit = load_stage_config(config_path, stage)
     settings = config["trainer"]
+    generation_settings = load_generation_config(generation_config, generation_backend)
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
         raise ValueError("Post-SFT training uses one process.")
     saved = step = None
     if resume is not None:
         resume, saved, step = read_source(resume, resume=True)
+        require_resume_engine(saved)
+        prepared_sft_data = prepared_sft_data or saved.get("prepared_sft_data")
         if saved.get("stage") != stage:
             raise ValueError(f"Resume requires a {stage.upper()} checkpoint.")
         if stage == "dpo" and saved["data"].get("answer_format") != DPO_ANSWER_FORMAT:
@@ -108,6 +144,8 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None):
     if sft.get("stage", "sft") != "sft" or sft_source.name != "final":
         raise ValueError("Use the final/ adapter from a finished SFT run.")
     evaluation = {key: sft[key] for key in ("config", "data", "text_format")}
+    if "data_environment" in sft:
+        evaluation["data_environment"] = sft["data_environment"]
     with (sft_source / "adapter_model.safetensors").open("rb") as weights:
         source_hash = hashlib.file_digest(weights, "sha256").hexdigest()
     if saved is not None and (evaluation != saved["evaluation"] or source_hash != saved["source_adapter_sha256"]):
@@ -122,7 +160,18 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None):
     tokenizer = load_tokenizer(sft_source, local_files_only=True)
     run_path = resume.parent if resume is not None else output_dir or config["output_dir"]
     args = training_arguments(stage, settings, run_path, bf16, tokenizer)
-    sft_data, sft_info = prepare_dataset(sft_config, tokenizer)
+    if stage == "grpo" and args.use_vllm:
+        from generation import validate_vllm_environment
+        validate_vllm_environment(training=True)
+        required_context = length_limit + args.max_completion_length
+        if args.vllm_max_model_length is None:
+            args.vllm_max_model_length = required_context
+        if args.vllm_max_model_length < required_context:
+            raise ValueError("vllm_max_model_length cannot be smaller than prompt plus completion budgets.")
+    prepared_sft_data = resolve_prepared_sft_data(sft_source, prepared_sft_data, sft.get("prepared_sft_data"))
+    require_data_environment(sft, sft_source, prepared_sft_data)
+    sft_data, sft_info = (load_prepared_sft_data(prepared_sft_data, sft_config, tokenizer) if prepared_sft_data
+                         else prepare_dataset(sft_config, tokenizer))
     plan = data_plan(sft_data, sft, sft_info)
     held_out = sft_data.select(plan["validation_indices"])["question"]
     train_data, train_info = prepare_post_training_data(stage, config["data"], tokenizer, held_out, length_limit)
@@ -131,11 +180,25 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None):
     metadata = {"stage": stage, "config": config, "data": train_info, "evaluation": evaluation,
                 "scoring": sft["scoring"],
                 "source_adapter": str(sft_source), "source_adapter_sha256": source_hash}
+    if prepared_sft_data:
+        metadata["prepared_sft_data"] = str(Path(prepared_sft_data).expanduser().resolve())
+    metadata["generation_engine"] = {
+        "backend": "vllm" if stage == "grpo" and args.use_vllm else "transformers",
+        "trl_version": package_version("trl"), "vllm_version": package_version("vllm"),
+        "generation_kwargs": args.generation_kwargs if stage == "grpo" else None,
+        "effective_settings": {key: value for key, value in args.to_dict().items() if key.startswith("vllm_")},
+    }
     if saved is not None and train_info != saved["data"]:
         raise ValueError("Training data or filtering differs from the saved checkpoint.")
 
     set_seed(args.seed)
     model = load_training_model(sft_config, sft_source)
+    if stage == "dpo" and Version(trl.__version__) < Version("1.0"):
+        # This TRL generation defaults to disabling LoRA for DPO's reference.
+        # Load the fixed SFT adapter explicitly so KL/preferences never use the raw base instead.
+        model.load_adapter(sft_source, adapter_name="ref", is_trainable=False, local_files_only=True)
+        model.set_adapter("default")
+        args.ref_adapter_name, args.model_adapter_name = "ref", "default"
     if stage == "dpo":
         context_limit = length_limit
     else:
@@ -164,8 +227,11 @@ def train(stage, config_path, *, sft_source=None, resume=None, output_dir=None):
         trainer.save_model(final_dir)
         trainer.save_state()
         print(f"Training complete. Saved adapter and tokenizer to {final_dir}", flush=True)
-        evaluate_checkpoint(final_dir, model=trainer.model, tokenizer=tokenizer, dataset=sft_data,
-                            data_info=sft_info, disable_tqdm=args.disable_tqdm)
+        if generation_settings["backend"] == "transformers":
+            if stage != "grpo" or not args.use_vllm:
+                evaluate_checkpoint(final_dir, model=trainer.model, tokenizer=tokenizer, dataset=sft_data,
+                                    data_info=sft_info, disable_tqdm=args.disable_tqdm,
+                                    generation_config=generation_config, generation_backend="transformers")
     return final_dir
 
 
@@ -177,10 +243,18 @@ def main():
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--sft-source", type=Path, help="Initialize from a completed SFT final/ adapter.")
     source.add_argument("--resume-from-checkpoint", type=Path, help="Resume an unfinished stage in its own run directory.")
+    add_generation_arguments(parser)
+    add_prepared_data_argument(parser)
     args = parser.parse_args()
     try:
-        train(args.stage, args.config or CONFIG_DIR / f"training/{args.stage}.yaml",
-              sft_source=args.sft_source, resume=args.resume_from_checkpoint, output_dir=args.output_dir)
+        final_dir = train(args.stage, args.config or CONFIG_DIR / f"training/{args.stage}.yaml",
+                          sft_source=args.sft_source, resume=args.resume_from_checkpoint, output_dir=args.output_dir,
+                          generation_config=args.generation_config, generation_backend=args.generation_backend,
+                          prepared_sft_data=args.prepared_sft_data)
+        settings = load_generation_config(args.generation_config, args.generation_backend)
+        stage_config = load_stage_config(args.config or CONFIG_DIR / f"training/{args.stage}.yaml", args.stage)[0]
+        if settings["backend"] == "vllm" or (args.stage == "grpo" and stage_config["trainer"].get("use_vllm", False)):
+            exec_final_evaluation(final_dir, args.generation_config, args.generation_backend, args.prepared_sft_data)
     except (OSError, TypeError, ValueError, KeyError) as error:
         parser.error(str(error))
 

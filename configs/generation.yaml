@@ -1,0 +1,6 @@
+# Shared by evaluation, samples, and evaluation after SFT/DPO/GRPO.
+backend: vllm
+vllm:
+  gpu_memory_utilization: 0.8
+  enforce_eager: false
+  seed: 42
