@@ -1,0 +1,23 @@
+{
+  "id": "instruct-datasets51-cpu-v1",
+  "python": "3.12",
+  "data_environment": {
+    "datasets": "5.1.0",
+    "transformers": "5.20.2",
+    "tokenizers": "0.23.3",
+    "dill": "0.4.1",
+    "pyarrow": "26.0.0",
+    "xxhash": "4.0.2"
+  },
+  "packages": {
+    "torch": "2.6.0+cpu",
+    "huggingface-hub": "2.3.0",
+    "numpy": "2.5.2",
+    "sympy": "1.13.1",
+    "fsspec": "2026.7.0",
+    "multiprocess": "0.70.19",
+    "math-verify": "0.9.0",
+    "latex2sympy2_extended": "1.11.0",
+    "antlr4-python3-runtime": "4.13.2"
+  }
+}

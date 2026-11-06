@@ -1,0 +1,14 @@
+# Internal, data-only compatibility environment. No system CUDA Toolkit needed.
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cpu
+-r requirements-original.txt
+torch==2.6.0+cpu
+tokenizers==0.23.3
+huggingface-hub==2.3.0
+dill==0.4.1
+pyarrow==26.0.0
+xxhash==4.0.2
+numpy==2.5.2
+sympy==1.13.1
+fsspec==2026.7.0
+multiprocess==0.70.19

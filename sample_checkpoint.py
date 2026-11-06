@@ -6,46 +6,15 @@ import random
 import re
 
 import torch
-from peft import PeftModel
-from transformers import AutoModelForCausalLM
 from transformers.utils import logging
 from tqdm.auto import tqdm
 
-from prepare_sft_data import (CONFIG_DIR, build_prompt, load_config, load_tokenizer, model_dtype,
+from prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer,
                               prepare_dataset, require_model, text_format, validate_precision)
 from training_workflow import read_source
 from math_data import dataset_label
-
-
-@torch.inference_mode()
-def generate_answers(model, tokenizer, questions, max_new_tokens):
-    prompts = [build_prompt(tokenizer, question) for question in questions]
-    inputs = tokenizer(prompts, padding=True, padding_side="left", add_special_tokens=False,
-                       return_tensors="pt").to(model.device)
-    prompt_width = inputs["input_ids"].shape[-1]
-    if prompt_width + max_new_tokens > model.config.max_position_embeddings:
-        raise ValueError("Question and output budget exceed the model context; reduce max-new-tokens.")
-    eos = tokenizer.eos_token_id
-    was_training, use_cache = model.training, model.config.use_cache
-    model.eval()
-    try:
-        model.config.use_cache = True
-        with torch.autocast(model.device.type, dtype=torch.bfloat16, enabled=model.dtype == torch.bfloat16):
-            outputs = model.generate(
-                **inputs, max_new_tokens=max_new_tokens, do_sample=False, use_cache=True,
-                eos_token_id=eos, pad_token_id=tokenizer.pad_token_id,
-            )[:, prompt_width:].tolist()
-    finally:
-        model.config.use_cache = use_cache
-        model.train(was_training)
-    answers = []
-    for output in outputs:
-        finished = eos in output
-        if finished:
-            output = output[:output.index(eos) + 1]
-        truncated = not finished and len(output) >= max_new_tokens
-        answers.append((tokenizer.decode(output, skip_special_tokens=True), len(output), truncated))
-    return answers
+from generation import (add_generation_arguments, create_generator, generate_answers, load_generation_config)
+from prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 
 
 def generate_answer(model, tokenizer, question, max_new_tokens):
@@ -65,16 +34,21 @@ def main():
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--device", choices=("cpu", "cuda"))
     parser.add_argument("--output", type=Path)
+    add_generation_arguments(parser)
+    add_prepared_data_argument(parser)
     args = parser.parse_args()
     try:
         if args.checkpoint:
             args.checkpoint, metadata, _ = read_source(args.checkpoint)
+            args.prepared_sft_data = args.prepared_sft_data or metadata.get("prepared_sft_data")
+            data_source = metadata.get("source_adapter") if metadata.get("stage") in ("dpo", "grpo") else args.checkpoint
             metadata = metadata.get("evaluation", metadata)
             config = metadata["config"]
             model_name = config["model_name"]
             label = f"lora-{args.checkpoint.parent.name}-{args.checkpoint.name}"
         else:
             metadata = None
+            data_source = None
             config = load_config(args.config)
             model_name = args.model_name
             require_model(model_name)
@@ -86,11 +60,14 @@ def main():
             raise ValueError("num-samples and max-new-tokens must be positive.")
         device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
         validate_precision(config, device)
+        generation_settings = load_generation_config(args.generation_config, args.generation_backend)
         local_only = args.local_files_only or args.checkpoint is not None
         tokenizer = load_tokenizer(args.checkpoint or model_name, local_files_only=local_only)
         if metadata and text_format(tokenizer) != metadata["text_format"]:
             raise ValueError("Source tokenizer template differs.")
-        dataset, info = prepare_dataset(config, tokenizer)
+        args.prepared_sft_data = ensure_prepared_sft_data(data_source, metadata, args.prepared_sft_data)
+        dataset, info = (load_prepared_sft_data(args.prepared_sft_data, config, tokenizer) if args.prepared_sft_data
+                         else prepare_dataset(config, tokenizer))
         if metadata:
             from training_workflow import data_plan
             data_plan(dataset, metadata, info)
@@ -100,24 +77,25 @@ def main():
         parser.error(str(error))
     logging.disable_progress_bar()
     logging.set_verbosity_error()
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name, dtype=model_dtype(config), local_files_only=local_only,
-        adapter_kwargs={"local_files_only": local_only},
-    )
-    if args.checkpoint:
-        model = PeftModel.from_pretrained(model, args.checkpoint, local_files_only=True)
-    model.to(device).eval()
+    generation_config = {**config, "max_new_tokens": budget}
+    generator = create_generator(model_name, args.checkpoint, tokenizer, generation_config, generation_settings, device,
+                                 local_files_only=local_only)
     indices = random.Random(args.seed).sample(range(len(dataset)), args.num_samples)
     report = ["# 数学样本问答\n", f"- Model：`{model_name}`\n- 来源：`{args.checkpoint or model_name}`\n"
               f"- 数据：`{config['data']}`\n- 抽题种子：{args.seed}；索引：{indices}\n"
-              f"- 贪心生成；max_new_tokens：{budget}；BF16：{config.get('bf16', False)}\n"]
-    for index in tqdm(indices, desc="Generate sample answers", unit="question"):
-        row = dataset[index]
-        answer, count, truncated = generate_answer(model, tokenizer, row["question"], budget)
-        report.append(f"## 样本 {row['source_index']} / 轨迹 {row['generation_index']}\n\n"
-                      f"### 问题\n\n{row['question']}\n\n### 模型回答\n\n{answer}\n\n"
-                      f"生成 {count} tokens；截断：{truncated}。\n\n"
-                      f"### 数据集标准解答\n\n{row['answer']}\n\n### 参考最终答案\n\n{row['final_answer']}\n")
+              f"- 准备数据缓存：`{args.prepared_sft_data}`\n"
+              f"- 贪心生成；max_new_tokens：{budget}；BF16：{config.get('bf16', False)}\n"
+              f"- 生成引擎：`{generator.description}`；初始化：{generator.initialization_runtime:.3f} s\n"]
+    try:
+        for index in tqdm(indices, desc="Generate sample answers", unit="question"):
+            row = dataset[index]
+            answer, count, truncated = generator.generate([row["question"]], budget)[0]
+            report.append(f"## 样本 {row['source_index']} / 轨迹 {row['generation_index']}\n\n"
+                          f"### 问题\n\n{row['question']}\n\n### 模型回答\n\n{answer}\n\n"
+                          f"生成 {count} tokens；截断：{truncated}。\n\n"
+                          f"### 数据集标准解答\n\n{row['answer']}\n\n### 参考最终答案\n\n{row['final_answer']}\n")
+    finally:
+        generator.close()
     label = re.sub(r"[^A-Za-z0-9._-]+", "--", label)
     data_label = dataset_label(config["data"])
     output = args.output or (Path(__file__).resolve().parent / "outputs/samples"
