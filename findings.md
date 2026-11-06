@@ -1,5 +1,14 @@
 # 当前实现发现
 
+## 项目整理调查（2026-11-06）
+
+- 代码事实和需求澄清统一记录在 [项目整理需求](docs/project-layout.md)。`evaluate_checkpoint.py:17` 间接导入 `sample_checkpoint.generate_answers`，实际函数位于 `generation.py:109`；不依赖随机抽样 CLI。
+- `training_workflow.py` 无 CLI。SFT 与 DPO/GRPO 两个入口之间存在共用模型加载函数的反向依赖，可在统一入口实施时下沉到业务共用模块。
+- 生成 JSONL 以已保存条数定位；重评 JSONL 以 index 读取判决；index 是验证集顺序中的原数据集索引，不能按数值最大值推进。现有独立重评逐题串联二三级，需要用户确认是否改为全量阶段屏障。
+- 缺 API 密钥当前计为已处理的待复核；训练结束会调用统一评测。三级整合的缺凭据与自动触发语义需要明确。
+- 根部模块使用 `__file__` 定位配置、默认输出与评测入口；迁入目录时需保持仓库根定位。legacy worker 及测试导入要随重构同步调整，旧数据依赖边界不应因普通移文件被打破。
+- 远程 main/1cf99db 已合入 PR51；新需求分支为 `codex/project-layout-requirements`。本次查询仅 #33 仍 open，后续不重复查询。
+
 ## 原入口与数据流程
 
 prepared_sft_data.ensure_prepared_sft_data(source,metadata,explicit,saved)先复用缓存；新SFT/同数据依赖来源走现有准备流程；识别旧来源后才lazy调用legacy/sft_data/migration.py。原四个入口不要求新开关或独立命令。CPU worker不递归调用helper，只准备并核对数据。

@@ -1,5 +1,13 @@
 # 当前进展
 
+## 2026-11-06：项目整理第一轮澄清
+
+- 已读取 grill-with-docs 及其组合的 grilling/domain-modeling；使用 planning-with-files-zh 和 writing-for-agents 维护本轮资料。按 grilling 要求，委派两个只读调查分别核对评测与训练。
+- 远程 main/1cf99db 已包含 PR51；受控入口创建独立需求分支 `codex/project-layout-requirements`。open PR 一次性查询仅有 #33。
+- 核实评测对 sample_checkpoint 只有共享生成函数的间接依赖；实际训练只有两个可执行入口；记录 index 非连续数值，当前一二三级没有分开的执行进度。
+- 新增 `docs/project-layout.md`，区分用户目标、代码事实和待决问题。待用户回答第一轮问题再继续；尚未修改业务代码或既有训练/评分要求。
+- 本轮仅检查代码与文档，未运行训练、评测生成或付费 API。未提交研究文件保持原样。
+
 ## 2026-11-06：现有入口自动准备与标准Conda环境已实现
 
 用户确认PR50已合入。受控入口从最新main/ebbe9ca创建codex/implicit-sft-migration，普通合并7215c05承接PR49/c406fc3完整历史；规划文件冲突保留最新要求，受控入口不能完成冲突后的merge，已获一次性正式宿主审批完成普通merge提交。
