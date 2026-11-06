@@ -24,9 +24,13 @@
 | --- | --- | --- |
 | 核对现状 | complete | 区分/tmp仅验收路径、默认cache前缀与用户新要求；核对PR49仍open。 |
 | 修订要求 | complete | 原有脚本自动触发、标准Conda命名环境、缓存直接复用；保留数据与生成协议。 |
-| 验证与提交 | in_progress | 文档无矛盾、diff检查通过，提交推送独立要求PR。 |
+| 验证与提交 | complete | 文档无矛盾、diff检查通过，提交推送独立要求PR。 |
 | 功能修订 | pending | 用户合入要求后，从最新远程main新建功能分支，承接PR49历史后修改并验证。 |
 
 ## 历史
 
 此前详细规划在既有Git历史及PR49的docs/planning-archive/2026-11-06-pre-migration/中保留；当前文件只描述本次纠正。按用户最新决定执行，不再沿用独立迁移入口方案。
+
+## 本轮交付
+
+要求PR #50：https://github.com/FishSkin2002/LM_post_training/pull/50。文档检查通过，代码尚未修订；等待用户合入要求，再承接PR49实施新方案。
