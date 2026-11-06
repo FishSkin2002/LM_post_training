@@ -1,11 +1,11 @@
 # Qwen3 Instruct 数学训练约定
 
-用户于 2026-10-29 确定：项目一以 `Qwen/Qwen3-4B-Instruct-2507` 为起点，在 OpenR1-Math-220k 的 R1 生成解答上做 LoRA SFT，后续再开展 GRPO。本约定替代此前的 Base 普通文本 QA 路线；文件路径保留，供现有文档入口引用。
+项目一以 `Qwen/Qwen3-4B-Instruct-2507` 为起点，在 OpenR1-Math-220k 的 R1 生成解答上做 LoRA SFT，后续分别开展 DPO 和 GRPO。本约定沿用 2026-10-29 确定的 Instruct 与聊天样本路线，替代此前的 Base 普通文本 QA 路线；文件路径保留，供现有文档入口引用。
 
 ## 模型与范围
 
 - 当前真实训练与训练前对照固定使用 `Qwen/Qwen3-4B-Instruct-2507`。它已经接受官方后训练；“原始模型”仅表示尚未接受本项目训练，不表示未经官方 SFT 或推理训练。
-- 原始 Instruct 经本项目 LoRA SFT 得到后续训练起点。DPO 与 GRPO 分别从同一个 SFT 产物开始，使用各自的[训练约定](post-training-workflow.md)。本文件规定 SFT 的模型、数据和样本格式。
+- 原始 Instruct 经本项目 LoRA SFT 得到后续训练起点。本项目对照实验中的 DPO 与 GRPO 是两种独立方法，分别从同一个 SFT 产物开始，使用各自的[训练约定](post-training-workflow.md)。本文件规定 SFT 的模型、数据和样本格式。
 - 旧 Base 配置和运行产物保留作历史资料，不用于新版流程的恢复、加训或训练前后比较。接口验证使用临时随机微型模型，不以另一种真实模型的结果代替主线结果。
 
 ## 数据来源与统一入口
