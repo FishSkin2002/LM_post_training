@@ -1,5 +1,14 @@
 # 当前实现发现
 
+## DeepSeek 最终答案裁判调查（2026-11-07）
+
+- utils/answer_judge.py 已使用兼容 Chat Completions 的标准库 HTTP 请求；现有模拟测试覆盖 GLM 和 DeepSeek，但默认配置、帮助和 README 仍为 GLM。
+- 原提示未禁止独立解题，撕纸示例还给出推导。将其替换为最终结论比较规则及纯比较示例；完整题目、R1 解答和候选回答依既有约定保留，只限定其用途，不自行裁剪输入。
+- DeepSeek 官方当前首调文档列出 deepseek-flash 和 deepseek-v4-pro；采用 deepseek-flash，基础地址 https://api.deepseek.com，凭据 DEEPSEEK_API_KEY。来源：[首次调用](https://api-docs.deepseek.com/)。
+- 官方思考模式默认开启，需在直接 HTTP JSON 中显式配置 thinking: {type: disabled}；结构化输出配置 response_format: {type: json_object}，提示包含 JSON 和有效对象示例。来源：[思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)、[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)。关闭思考和提示约束不能构成模型内部行为的绝对保证，真实语义质量仍需人工核查。
+- 既有重评不会核查旧输出配置并会复用历史判决。本轮不改变已确认的续跑规则，README 要提醒更换服务或提示时选新输出路径。
+- 实现已替换旧 GLM 配置为 configs/evaluation/deepseek.yaml，默认值与 CLI 帮助同步；JUDGE_PROMPT 为 1344 字符的中文原文，PROMPT_VERSION 升为 math-final-answer-v2。两个测试模块共 23 项通过，覆盖真实 Math-Verify、模拟两家 API、DeepSeek 参数和版本审计、短路、脱敏、失败/不确定/截断及续跑。未调用真实 API，不能将离线请求检查当作语义遵循保证。
+
 ## 旧兼容环境 SOCKS 依赖（2026-11-06）
 
 - HTTPX 的 SOCKS 支持是可选依赖，官方安装方式为 httpx[socks]：[HTTPX 代理说明](https://www.python-httpx.org/advanced/proxies/#socks)。当前主环境 HTTPX 为 0.28.1 且缺少 socksio，可用不联网的客户端构造复现相同报错。

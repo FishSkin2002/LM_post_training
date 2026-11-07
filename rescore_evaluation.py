@@ -222,7 +222,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path, help="Completed OpenR1 generation evaluation JSON.")
     parser.add_argument("--output", type=Path, help="New JSON output; default: INPUT-rescored.json.")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Judge YAML; default: configs/evaluation/glm-5.3.yaml.")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Judge YAML; default: configs/evaluation/deepseek.yaml.")
     parser.add_argument("--retry-pending", action="store_true", help="Retry saved pending judgments once in this run.")
     args = parser.parse_args()
     try:
