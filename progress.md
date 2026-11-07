@@ -7,6 +7,7 @@
 - 规划文件首次补丁因 progress.md 标题与预期不同而整批未应用；核对实际标题后重新应用。
 - 已替换默认 YAML 并同步 CLI/README，完整中文提示保留最终答案定位、子问对应、数学等价及待复核，禁止重解题、补造参考和以中间推导替代最终答案；移除原有推导示例，增加参考不足的纯比较案例。提示版本更新为 math-final-answer-v2。
 - tools.test_rescore_evaluation 与 tools.test_rule_evaluation 共 23 项在 qwen-vllm 环境通过（1.672s）；默认配置、CLI 帮助、三份 Python 语法、四份 Markdown 的本地链接及 git diff --check 均通过。本轮没有真实 API 调用或模型训练。
+- 功能提交 21823ad 已通过受控入口正常推送，已创建 [PR62](https://github.com/FishSkin2002/LM_post_training/pull/62)。本轮完成现有裁判的切换及提示修订，完整提示在回复中展示；等待用户审查，不跨步骤继续。
 
 ## 2026-11-06：补齐旧兼容环境的 SOCKS 代理依赖
 
