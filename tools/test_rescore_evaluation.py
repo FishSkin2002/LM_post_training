@@ -36,7 +36,7 @@ def row(index, *, reference="2", r1=r"\boxed{3}", answer=r"\boxed{4}", truncated
             "generation_runtime": 2, "generation_batch_size": 4}
 
 
-def completion(verdict="correct", reason="Final conclusions match.", *, model="glm-5.3", finish="stop"):
+def completion(verdict="correct", reason="Final conclusions match.", *, model="deepseek-flash", finish="stop"):
     return {"model": model, "choices": [{"finish_reason": finish, "message": {
         "role": "assistant", "content": json.dumps({"verdict": verdict, "reason": reason}),
         "reasoning_content": "Provider-specific reasoning is not the verdict.",
@@ -163,10 +163,15 @@ class RescoringTests(unittest.TestCase):
         self.assertEqual((metrics["api_samples"], metrics["api_calls"]), (4, 4))
         self.assertEqual(report["pending_review_indices"], [5, 6])
         self.assertEqual(report["original_metrics"], source["metrics"])
+        self.assertEqual(report["rescoring"]["protocol"]["prompt_version"], "math-final-answer-v2")
+        self.assertEqual(report["rescoring"]["judge"]["model"], "deepseek-flash")
+        self.assertEqual(report["rescoring"]["judge"]["request_parameters"], {
+            "thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}})
         self.assertEqual(metrics["generation_runtime"], 99)
         self.assertEqual(self.input.read_bytes(), original)
         sent = json.loads(request.call_args_list[0].args[0].data)
         submitted = json.loads(sent["messages"][1]["content"])
+        self.assertEqual(sent["messages"][0], {"role": "system", "content": api.JUDGE_PROMPT})
         self.assertEqual(submitted["candidate_solution"], rows[2]["answer"])
         self.assertEqual(submitted["r1_reference_solution"], rows[2]["reference_answer"])
         self.assertEqual(submitted["dataset_reference_answer"], "1008")
@@ -280,17 +285,18 @@ class RescoringTests(unittest.TestCase):
     def test_missing_or_invalid_credentials_are_pending_without_request(self):
         self.write_input([row(0)])
         for key in ("", "bad\nkey"):
-            with self.subTest(key=key), patch.dict(os.environ, {"ZAI_API_KEY": key}), \
+            with self.subTest(key=key), patch.dict(os.environ, {"DEEPSEEK_API_KEY": key}), \
                     patch.object(api, "urlopen", side_effect=AssertionError("No request allowed")):
                 report = self.run_rescoring(retry_pending=True)
                 self.assertIsNone(report["predictions"][0]["correct"])
                 self.assertEqual(report["metrics"]["api_calls"], 0)
 
     def test_api_contract_for_glm_and_deepseek_and_secret_redaction(self):
-        for provider, base, env in (
-                ("glm-5.3", "https://open.bigmodel.cn/api/paas/v4/", "ZAI_API_KEY"),
-                ("configured-deepseek-model", "https://api.deepseek.com", "DEEPSEEK_API_KEY")):
-            config = {**self.config, "model": provider, "base_url": base, "api_key_env": env}
+        for config in (
+                {**self.config, "model": "glm-5.3", "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+                 "api_key_env": "ZAI_API_KEY", "request_parameters": {}},
+                self.config):
+            provider, base, env = (config[name] for name in ("model", "base_url", "api_key_env"))
             key = os.environ[env]
             reply = completion(reason="Compared final answers; " + key, model=provider)
             with self.subTest(provider=provider), patch.object(api, "urlopen", return_value=response(reply)) as request:
@@ -302,23 +308,29 @@ class RescoringTests(unittest.TestCase):
                 self.assertEqual(body["model"], provider)
                 self.assertFalse(body["stream"])
                 self.assertEqual(body["max_tokens"], 4096)
+                if env == "DEEPSEEK_API_KEY":
+                    self.assertEqual(body["thinking"], {"type": "disabled"})
+                    self.assertEqual(body["response_format"], {"type": "json_object"})
+                else:
+                    self.assertNotIn("thinking", body)
+                    self.assertNotIn("response_format", body)
                 self.assertEqual(decision["status"], "passed")
                 self.assertNotIn(key, json.dumps(decision))
                 self.assertEqual(decision["attempts"][0]["returned_model"], provider)
                 self.assertEqual(decision["attempts"][0]["usage"]["total_tokens"], 125)
         self.write_input([row(0)])
-        with patch.object(api, "urlopen", return_value=response(completion(reason="Contains sk-test-secret"))):
+        with patch.object(api, "urlopen", return_value=response(completion(reason="Contains ds-test-secret"))):
             self.run_rescoring()
         for artifact in self.root.glob("rescored*"):
-            self.assertNotIn("sk-test-secret", artifact.read_text())
+            self.assertNotIn("ds-test-secret", artifact.read_text())
 
     def test_http_retry_exhaustion_and_nonretryable_errors(self):
         judge = api.APIJudge(self.config)
-        transient = HTTPError("https://example.test", 429, "rate limit", {}, BytesIO(b"sk-test-secret"))
+        transient = HTTPError("https://example.test", 429, "rate limit", {}, BytesIO(b"ds-test-secret"))
         with patch.object(api, "urlopen", side_effect=[transient, URLError("unavailable"), response(completion())]) as request:
             decision = judge(row(0))
         self.assertEqual((decision["status"], request.call_count), ("passed", 3))
-        self.assertNotIn("sk-test-secret", json.dumps(decision))
+        self.assertNotIn("ds-test-secret", json.dumps(decision))
         broken_error = HTTPError("https://example.test", 502, "truncated error body", {}, BytesIO())
         with patch.object(broken_error, "read", side_effect=IncompleteRead(b"partial")), \
                 patch.object(api, "urlopen", side_effect=[broken_error, response(completion())]):
@@ -392,7 +404,7 @@ class RescoringTests(unittest.TestCase):
         command = [sys.executable, str(Path(rescoring.__file__)), "--input", str(self.input),
                    "--output", str(self.output)]
         for _ in range(2):
-            completed = subprocess.run(command, cwd=self.root, env={**os.environ, "ZAI_API_KEY": ""},
+            completed = subprocess.run(command, cwd=self.root, env={**os.environ, "DEEPSEEK_API_KEY": ""},
                                        capture_output=True, text=True, check=True)
             self.assertIn("66.67% (2/3)", completed.stdout)
             report = json.loads(self.output.read_text())

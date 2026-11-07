@@ -291,8 +291,8 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/final
 在运行判分命令的终端中输入模型服务所需的密钥：
 
 ```bash
-read -rsp 'GLM API Key: ' ZAI_API_KEY
-export ZAI_API_KEY
+read -rsp 'DeepSeek API Key: ' DEEPSEEK_API_KEY
+export DEEPSEEK_API_KEY
 ```
 
 #### 使用大模型判分
@@ -303,9 +303,11 @@ python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/
 
 将 `--input` 替换为已完成一二级评测的 JSON 报告，将 `--output` 替换为新的报告路径。
 
+默认使用 DeepSeek Flash，关闭思考模式，仅核对最终答案；完整提示词见 [JUDGE_PROMPT](utils/answer_judge.py)。更换裁判模型或提示词后，使用新的 `--output` 路径开始判分。
+
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | `configs/evaluation/glm-5.3.yaml` | 选择模型服务地址、模型与请求设置。 |
+| `--config` | `configs/evaluation/deepseek.yaml` | 选择模型服务地址、模型与请求设置。 |
 | `--retry-pending` | 复用已保存的待复核判决 | 重新尝试待复核题。 |
 
 #### 继续判分或重试待复核题
@@ -318,4 +320,4 @@ python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/
 
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | `configs/evaluation/glm-5.3.yaml` | 沿用首次判分的模型服务配置。 |
+| `--config` | `configs/evaluation/deepseek.yaml` | 沿用首次判分的模型服务配置。 |

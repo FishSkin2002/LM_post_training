@@ -1,0 +1,13 @@
+# Official DeepSeek Chat Completions judge. The key is read only from the environment.
+base_url: https://api.deepseek.com
+model: deepseek-flash
+api_key_env: DEEPSEEK_API_KEY
+timeout_seconds: 180
+max_attempts: 3
+retry_delay_seconds: 2
+max_tokens: 4096
+request_parameters:
+  thinking:
+    type: disabled
+  response_format:
+    type: json_object

@@ -1,5 +1,13 @@
 # 当前进展
 
+## 2026-11-07：DeepSeek 最终答案裁判
+
+- 已恢复规划并核对分级评测、训练、README 和 Git 约定。PR61 已合入 main/0f1380b；通过受控入口新建 codex/deepseek-answer-judge，一次性 open 查询只见其他任务 PR33。未跟踪研究文件保留。
+- 本轮按用户明确要求调整现有第三级配置和提示，采用 DeepSeek Flash、显式关闭思考、要求 JSON；保留完整输入并禁止裁判独立解题。独立三级/汇总新入口仍留后续。
+- 规划文件首次补丁因 progress.md 标题与预期不同而整批未应用；核对实际标题后重新应用。
+- 已替换默认 YAML 并同步 CLI/README，完整中文提示保留最终答案定位、子问对应、数学等价及待复核，禁止重解题、补造参考和以中间推导替代最终答案；移除原有推导示例，增加参考不足的纯比较案例。提示版本更新为 math-final-answer-v2。
+- tools.test_rescore_evaluation 与 tools.test_rule_evaluation 共 23 项在 qwen-vllm 环境通过（1.672s）；默认配置、CLI 帮助、三份 Python 语法、四份 Markdown 的本地链接及 git diff --check 均通过。本轮没有真实 API 调用或模型训练。
+
 ## 2026-11-06：补齐旧兼容环境的 SOCKS 代理依赖
 
 - 用户报告 HTTPX 使用 SOCKS 代理时缺少 socksio，要求补充旧兼容环境依赖。
