@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import io
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -34,6 +35,8 @@ import train as training_cli
 from utils import arguments
 import utils.training_workflow as workflow
 import evaluate_checkpoint as evaluation
+import summarize_evaluation as summarizing
+import utils.answer_judge as answer_judge
 import utils.generation as generation
 
 # Official Qwen3-4B-Instruct-2507 template, revision cdbee75f17c01a7cc42f958dc650907174af0554.
@@ -90,6 +93,12 @@ class InstructSFTTests(unittest.TestCase):
         root_patch = patch.object(evaluation, "ROOT", self.root)
         root_patch.start()
         self.addCleanup(root_patch.stop)
+        self.api_requests = []
+        for change in (patch.object(summarizing, "ROOT", self.root),
+                       patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-training-key"}),
+                       patch.object(answer_judge, "urlopen", side_effect=self.api_response)):
+            change.start()
+            self.addCleanup(change.stop)
         native_config = self.root / "generation.yaml"
         native_config.write_text("backend: transformers\n")
         backend_patch = patch.object(generation, "GENERATION_CONFIG", native_config)
@@ -131,6 +140,12 @@ class InstructSFTTests(unittest.TestCase):
         self.model_calls = []
         self.models = []
         self.evaluation_count = 0
+
+    def api_response(self, request, **kwargs):
+        self.api_requests.append(request)
+        value = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
+            "verdict": "uncertain", "reason": "Synthetic API verdict for offline training checks."})}}]}
+        return io.BytesIO(json.dumps(value).encode())
 
     def model_loader(self, source, **kwargs):
         self.assertEqual(source, self.model_name)
@@ -396,6 +411,8 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(called.call_count,1)
         self.assertEqual(len(self.model_calls),1)
         report=stored_evaluation(self.final(run))
+        self.assertTrue((self.final(run)/"answers-0001.md").is_file())
+        self.assertEqual(len(list((self.final(run)/"scorings").glob("*/metadata.json"))),1)
         self.assertEqual(report["metrics"]["answer_accuracy"],1)
         self.assertEqual(report["generation"]["batch_size"],4)
         self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],[2,2])
@@ -451,6 +468,48 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(again["predictions"],report["predictions"])
         self.assertIn("6/6 completed",self.eval_terminal)
         self.assertEqual(progress_path.read_bytes(),completed_answers)
+
+    def test_auto_api_runs_only_after_model_and_local_decisions_are_saved(self):
+        self.config.update(max_steps=1)
+        final = self.root / "auto-api/final"
+
+        def request(saved_request, **kwargs):
+            self.assertTrue((final / "adapter_model.safetensors").is_file())
+            self.assertEqual(json.loads((final.parent / "trainer_state.json").read_text())["global_step"], 1)
+            directory = self.final(final.parent)
+            store = evaluation.EvaluationStore(directory, root=self.root)
+            self.assertEqual(len(store.answers), len(store.samples))
+            self.assertTrue(all(1 in levels and 2 in levels for levels in store.judgments.values()))
+            self.assertFalse((directory / "answers-0001.md").exists())
+            return self.api_response(saved_request, **kwargs)
+
+        with patch.object(evaluation, "generate_answers", return_value=[(r"\boxed{999}", 4, False)] * 2), \
+                patch.object(answer_judge, "urlopen", side_effect=request):
+            run = self.run_training("auto-api")
+        self.assertEqual(len(self.api_requests), 2)
+        self.assertIn("Pending review: 2", (self.final(run) / "answers-0001.md").read_text())
+        self.assertEqual(len(self.model_calls), 1, "Summary must not reload the policy model")
+
+    def test_failed_auto_summary_preserves_final_and_can_resume_without_training_or_generation(self):
+        self.config.update(max_steps=1)
+        with patch.object(evaluation, "generate_answers", return_value=[(r"\boxed{999}", 4, False)] * 2), \
+                patch.object(summarizing, "api_key", side_effect=ValueError("credential input cancelled")), \
+                self.assertRaisesRegex(RuntimeError, "training is saved"):
+            self.run_training("summary-stopped")
+        run = self.root / "summary-stopped"
+        final = run / "final"
+        self.assertTrue((final / "adapter_model.safetensors").is_file())
+        original = (final / "adapter_model.safetensors").read_bytes()
+        directory = self.final(run)
+        self.assertFalse((directory / "answers-0001.md").exists())
+        scoring = next((directory / "scorings").iterdir())
+        with patch.object(evaluation, "create_generator", side_effect=AssertionError("Saved answers must be reused")), \
+                patch.object(answer_judge, "urlopen", side_effect=AssertionError("No API for partial summary")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            report = summarizing.summarize_evaluation(resume_from=scoring, no_api=True, disable_tqdm=True)
+        self.assertEqual(report["metrics"]["unprocessed_samples"], 2)
+        self.assertTrue((directory / "answers-0001.md").exists())
+        self.assertEqual((final / "adapter_model.safetensors").read_bytes(), original)
 
     def test_all_outcomes_reuse_saved_records_without_writing_a_summary(self):
         self.raw=[raw_row(i) for i in range(40)]
@@ -650,9 +709,11 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(len((output.with_suffix("") / "judgments.jsonl").read_text().splitlines()), 1)
 
     def test_interruption_skips_evaluation_and_failed_final_evaluation_is_retryable(self):
-        with patch.object(train_sft,"evaluate_after_training") as called,self.assertRaises(Interrupted):
+        with patch.object(train_sft,"evaluate_after_training") as called, \
+                patch.object(summarizing,"summarize_evaluation") as summarized,self.assertRaises(Interrupted):
             self.run_training("stop",trainer=InterruptedTrainer)
         called.assert_not_called()
+        summarized.assert_not_called()
         with patch.object(train_sft,"evaluate_after_training",side_effect=RuntimeError("evaluation failed")),self.assertRaises(RuntimeError):
             self.run_training("failed")
         run=self.root/"failed";weights=(run/"final/adapter_model.safetensors").read_bytes()

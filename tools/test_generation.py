@@ -17,6 +17,7 @@ import utils.generation as generation
 import utils.training.grpo as train_grpo
 import train as training_common
 import evaluate_checkpoint as evaluation
+import summarize_evaluation as summarizing
 from utils.prepare_sft_data import load_tokenizer
 from utils.prepared_sft_data import load_prepared_sft_data, save_prepared_sft_data
 from utils.training_workflow import data_plan
@@ -155,15 +156,26 @@ class GenerationTests(unittest.TestCase):
         metadata = {"config": self.fixture.config, "data": data_plan(dataset, data_info=info),
                     "text_format": evaluation.text_format(self.tokenizer)}
 
+        engines = []
+
         def generator(model_name, checkpoint, tokenizer, config, settings, device, **kwargs):
             engine = Mock(initialization_runtime=0.0, description={"backend": settings["backend"]})
             engine.generate.side_effect = lambda questions, budget: [("invalid", budget, True)] * len(questions)
+            engines.append(engine)
             return engine
 
         def execute(executable, args):
             self.assertEqual(executable, sys.executable)
+            self.assertEqual(Path(args[1]).name, "train.py")
+            self.assertEqual(args[2], training_common.FINAL_EVALUATION_FLAG)
             with patch.object(sys, "argv", args[1:]):
-                evaluation.main()
+                training_common.main()
+
+        original_summary = summarizing.summarize_evaluation
+
+        def summarize(*args, **kwargs):
+            engines[-1].close.assert_called_once()
+            return original_summary(*args, **kwargs)
 
         with patch.object(evaluation, "read_source", return_value=(final, metadata, None)), \
                 patch.object(evaluation, "load_tokenizer", return_value=self.tokenizer), \
@@ -171,6 +183,7 @@ class GenerationTests(unittest.TestCase):
                 patch.object(evaluation, "prepare_dataset", return_value=(dataset, info)), \
                 patch.object(evaluation, "create_generator", side_effect=generator), \
                 patch.object(evaluation, "generate_answers", return_value=[("invalid", 4, True)] * 2), \
+                patch.object(summarizing, "summarize_evaluation", side_effect=summarize) as summary_calls, \
                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             native = training_common.evaluate_after_training(
                 final, {"backend": "transformers"}, model=Mock(), tokenizer=self.tokenizer,
@@ -183,9 +196,11 @@ class GenerationTests(unittest.TestCase):
             with patch.object(evaluation, "read_source", return_value=(vllm_final, metadata, None)), \
                     patch.object(training_common.os, "execv", side_effect=execute):
                 training_common.exec_final_evaluation(vllm_final, generation_backend="vllm")
+            self.assertEqual(summary_calls.call_count, 2)
         report = fixtures.stored_evaluation(next((vllm_final.parent / "evaluations").glob("*/metadata.json")).parent)
         self.assertEqual(report["generation"]["batch_size"], 64)
         self.assertFalse(report["generation"]["auto_batch_size"])
+        self.assertTrue((Path(report["directory"]) / "answers-0001.md").is_file())
 
     def test_config_default_and_explicit_native_override(self):
         settings = generation.load_generation_config(Path(__file__).parents[1] / "configs/generation.yaml")
@@ -279,8 +294,44 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(executable, sys.executable)
         self.assertIn(str(final), args)
         self.assertIn("--generation-backend", args)
-        self.assertIn("evaluate_checkpoint.py", args[1])
+        self.assertEqual(Path(args[1]).name, "train.py")
+        self.assertIn(training_common.FINAL_EVALUATION_FLAG, args)
         self.assertIn("--prepared-sft-data", args)
+
+    def test_local_evaluation_failure_never_starts_summary(self):
+        final = self.root / "saved-final"
+        with patch.object(evaluation, "evaluate_checkpoint", side_effect=RuntimeError("generation failed")), \
+                patch.object(summarizing, "summarize_evaluation") as summarize, \
+                self.assertRaisesRegex(RuntimeError, "training is saved") as error:
+            training_common.evaluate_saved_training(final)
+        summarize.assert_not_called()
+        self.assertIn(str(final), str(error.exception))
+        self.assertIn("evaluate_checkpoint.py", str(error.exception))
+
+    def test_grpo_training_vllm_requires_fresh_process_even_for_native_final_generation(self):
+        final = self.root / "grpo/final"
+        with patch.object(training_common, "evaluate_saved_training") as native:
+            self.assertIsNone(training_common.evaluate_after_training(
+                final, {"backend": "transformers"}, model=Mock(), tokenizer=self.tokenizer,
+                dataset=Mock(), training_uses_vllm=True))
+        native.assert_not_called()
+        with patch.object(train_grpo, "train", return_value=final), \
+                patch.object(train_grpo, "load_config", return_value=({"trainer": {"use_vllm": True}}, {})), \
+                patch.object(training_common, "exec_final_evaluation") as handoff:
+            training_common.main(["grpo", "--sft-source", str(self.root / "sft/final"),
+                                  "--generation-backend", "transformers"])
+        self.assertEqual(handoff.call_args.args[0], final)
+        self.assertEqual(handoff.call_args.args[2], "transformers")
+
+    def test_failed_process_replacement_has_no_in_process_fallback_and_public_help_stays_unchanged(self):
+        with patch.object(training_common.os, "execv", side_effect=OSError("exec failed")), \
+                patch.object(training_common, "evaluate_saved_training") as fallback, \
+                self.assertRaisesRegex(RuntimeError, "Training is saved"):
+            training_common.exec_final_evaluation(self.root / "final", generation_backend="vllm")
+        fallback.assert_not_called()
+        with redirect_stdout(io.StringIO()) as text, self.assertRaises(SystemExit):
+            training_common.main(["--help"])
+        self.assertNotIn(training_common.FINAL_EVALUATION_FLAG, text.getvalue())
 
     def test_saved_tokenizers_backend_keeps_vocabulary_and_chat_ids(self):
         path = self.root / "saved-tokenizer"

@@ -41,7 +41,8 @@ def saved_evaluation(store):
     metrics.update(generation_runtime=elapsed,
                    generation_samples_per_second=len(predictions) / max(elapsed, 1e-9),
                    generation_initialization_runtime=store.metadata["generation_initialization_runtime"])
-    report = {**store.metadata, "data": {**store.metadata["data"], "indices": [row["index"] for row in store.samples]},
+    report = {**store.metadata, "directory": str(store.directory),
+              "data": {**store.metadata["data"], "indices": [row["index"] for row in store.samples]},
               "metrics": metrics, "predictions": predictions}
     if report["data"]["source"]["name"] == OPENR1["name"]:
         completed = 0

@@ -272,6 +272,8 @@ class PostSFTTests(unittest.TestCase):
         self.assertEqual(metadata["evaluation"]["data"], sft_metadata["data"])
         self.assertEqual(metadata["data"]["filter_counts"], {"held_out_overlap": 1})
         report = fixtures.stored_evaluation(next((resumed.parent / "evaluations").glob("*/metadata.json")).parent)
+        self.assertTrue((Path(report["directory"]) / "answers-0001.md").is_file())
+        self.assertEqual(len(list((Path(report["directory"]) / "scorings").glob("*/metadata.json"))), 1)
         self.assertEqual(report["stage"], stage)
         self.assertEqual(report["data"], sft_report["data"])
         self.assertEqual(report["generation"], sft_report["generation"])
