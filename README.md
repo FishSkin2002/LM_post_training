@@ -65,16 +65,11 @@ configs/                         # 训练、开发、大模型判分和公共生
         │   └── run.json                 # 最终产物对应的运行信息
         ├── runs/                        # TensorBoard 日志
         │   └── events.out.tfevents.<标识> # 训练与验证曲线的事件文件
-        ├── evaluations/                 # 生成评测与大模型判分结果
-        │   ├── <评测名>.json            # 评测信息、完整回答与一二级判决
-        │   ├── <评测名>.progress.jsonl  # 逐题回答与一级判决，用于续跑
-        │   ├── <评测名>.md              # 题目、参考解答与模型回答的阅读版
-        │   ├── <评测名>.stage2.progress.jsonl # 二级判决，用于续跑
-        │   ├── <评测名>.stage2.md       # 二级判决的阅读版
-        │   ├── <评测名>-rescored.json   # 大模型判分结果与统计
-        │   ├── <评测名>-rescored.progress.jsonl # 大模型判分进度
-        │   ├── <评测名>-rescored.md     # 大模型判分结果的阅读版
-        │   └── <评测名>-rescored.api-review.md # 判分依据与待复核题目
+        ├── evaluations/                 # 生成及一二级评测
+        │   └── <评测名>/
+        │       ├── metadata.json         # 来源、共享快照引用、配置与环境
+        │       ├── answers.jsonl         # 模型回答与每题生成数据
+        │       └── judgments.jsonl       # 一级、二级判决与原因，用于续跑
         ├── prepared-sft/                # 读取旧 SFT 产物时自动准备的数据缓存
         │   ├── manifest.json            # 数据来源、准备配置与校验信息
         │   └── dataset/                 # 已准备的数据集
@@ -86,7 +81,7 @@ configs/                         # 训练、开发、大模型判分和公共生
 
 `<step>` 是断点步数，默认最多保留最近两个断点。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数；`-rescored` 文件在运行大模型判分后生成，`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
 
-原始模型的评测默认保存在仓库的 `outputs/evaluations/`；开发输出由开发配置指定。新训练和加训遇到重名运行目录时自动加 `-1`、`-2` 等后缀，断点续训沿用原目录。
+原始模型的评测默认保存在仓库的 `outputs/evaluations/`；题目与参考解答统一保存在仓库的 `outputs/evaluation-datasets/<快照标识>.json`，相同评测样本供各模型共用。开发输出由开发配置指定。新训练和加训遇到重名运行目录时自动加 `-1`、`-2` 等后缀，断点续训沿用原目录。
 
 ## 聊天格式
 
@@ -242,7 +237,9 @@ python train.py grpo --resume-from-checkpoint /path/to/grpo-run/checkpoint-100
 
 生成原始模型或训练产物的验证集回答，并完成一二级判分。
 
-首次读取旧 SFT 产物且缺少数据缓存时，会自动创建 CPU 兼容环境并准备数据。中断后重跑相同命令会继续已有进度；需要从头评测时用 `--output` 指定新路径。
+首次读取旧 SFT 产物且缺少数据缓存时，会自动创建 CPU 兼容环境并准备数据。中断后重跑相同命令会继续已有进度；需要从头评测时用 `--output` 指定新目录。评测保存共享样本快照、元数据和两个 JSONL，终端显示一级指标，此阶段不生成 Markdown。已保存回答的后续判定直接读取快照，无需重新读取原数据集。
+
+已有旧格式报告或进度占用同名位置时，用 `--output` 选择新目录开始新格式评测；旧文件保持原样。
 
 #### 评测原始模型
 
@@ -258,7 +255,7 @@ python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 | `--batch-size` | vLLM：`64`；Transformers：`4` | 每次提交的最大题数，须为正整数；Transformers 自适应模式下为起始题数。 |
 | `--auto-batch-size` | 固定批大小 | 仅限 Transformers：成功时增大批次，生成失败后缩小重试；与 vLLM 同用会报错。 |
 | `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足配置的精度要求。 |
-| `--output` | `outputs/evaluations/` 下自动命名 | 指定报告 JSON 路径，同名保存逐题进度和阅读版。 |
+| `--output` | `outputs/evaluations/` 下自动命名 | 指定保存元数据、回答和判决的评测目录。 |
 | `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
 | `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
 | `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
@@ -277,14 +274,14 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/final
 | `--batch-size` | vLLM：`64`；Transformers：`4` | 每次提交的最大题数，须为正整数；Transformers 自适应模式下为起始题数。 |
 | `--auto-batch-size` | 固定批大小 | 仅限 Transformers：成功时增大批次，生成失败后缩小重试；与 vLLM 同用会报错。 |
 | `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足来源精度要求。 |
-| `--output` | 运行目录的 `evaluations/` 下自动命名 | 指定报告 JSON 路径，同名保存逐题进度和阅读版。 |
+| `--output` | 运行目录的 `evaluations/` 下自动命名 | 指定保存元数据、回答和判决的评测目录。 |
 | `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
 | `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
 | `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
 
 ### rescore_evaluation.py
 
-通过 API 调用在线大模型，对已保存的 OpenR1 评测回答进行判分。
+读取历史完整评测 JSON，通过 API 调用在线大模型对其中的 OpenR1 回答进行判分。
 
 #### 准备 API 密钥
 
@@ -301,7 +298,7 @@ export DEEPSEEK_API_KEY
 python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json
 ```
 
-将 `--input` 替换为已完成一二级评测的 JSON 报告，将 `--output` 替换为新的报告路径。
+将 `--input` 替换为历史已完成一二级评测的完整 JSON 报告，将 `--output` 替换为新的报告路径。
 
 默认使用 DeepSeek Flash，关闭思考模式，仅核对最终答案；完整提示词见 [JUDGE_PROMPT](utils/answer_judge.py)。更换裁判模型或提示词后，使用新的 `--output` 路径开始判分。
 

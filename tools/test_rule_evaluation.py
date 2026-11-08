@@ -44,16 +44,18 @@ class RuleEvaluationTests(unittest.TestCase):
                 output=self.output, device="cpu", generation_backend="transformers", disable_tqdm=True,
                 batch_size=batch_size)
 
+    def store(self):
+        return evaluation.EvaluationStore(self.output, root=self.fixture.root)
+
     def test_all_generation_precedes_second_level_and_decisions_stay_separate(self):
-        original = rule_scoring.grade_rules
+        original = rule_scoring.grade_second_stage
 
         def grade(row):
-            saved = self.output.with_suffix(".progress.jsonl").read_text().splitlines()
-            self.assertEqual(len(saved), 4, "Second-level rules must wait for every generated answer")
+            self.assertEqual(len(self.store().answers), 4)
             return original(row)
 
         with patch.object(evaluation, "generate_answers", side_effect=[self.answers[:2], self.answers[2:]]), \
-                patch.object(rule_scoring, "grade_rules", side_effect=grade):
+                patch.object(rule_scoring, "grade_second_stage", side_effect=grade):
             report = self.evaluate(batch_size=2)
         rows = report["predictions"]
         self.assertEqual([row["correct"] for row in rows], [True, False, False, False])
@@ -66,21 +68,28 @@ class RuleEvaluationTests(unittest.TestCase):
         self.assertTrue(all(result["stages"]["stage3"]["status"] == "not_run" for result in results))
         self.assertTrue(report["rule_scoring"]["complete"])
         self.assertEqual(report["metrics"]["answer_accuracy"], .25)
-        first = [json.loads(line) for line in self.output.with_suffix(".progress.jsonl").read_text().splitlines()]
-        self.assertTrue(all("rule_scoring" not in row for row in first))
-        self.assertNotEqual(report["data"]["indices"], list(range(4)))
+        store = self.store()
+        self.assertTrue(all(set(row) == {"index", "answer", "generated_tokens", "truncated",
+                                         "generation_batch_size", "generation_runtime"} for row in store.answers))
+        judgments = [json.loads(line) for line in store.judgments_path.read_text().splitlines()]
+        self.assertEqual([row["stage"] for row in judgments], [1, 1, 1, 1, 2, 2])
+        self.assertTrue(all("stages" not in row and "answer" not in row for row in judgments))
+        self.assertNotEqual([row["source_index"] for row in rows], list(range(4)))
+        self.assertEqual({path.name for path in store.directory.iterdir()},
+                         {"metadata.json", "answers.jsonl", "judgments.jsonl"})
 
     def test_generation_interruption_never_starts_second_level(self):
         with patch.object(evaluation, "generate_answers", side_effect=[self.answers[:2], KeyboardInterrupt]), \
-                patch.object(rule_scoring, "grade_rules", side_effect=AssertionError("Generation is not complete")), \
+                patch.object(rule_scoring, "grade_second_stage", side_effect=AssertionError("Generation is not complete")), \
                 self.assertRaises(KeyboardInterrupt):
             self.evaluate(batch_size=2)
-        self.assertEqual(len(self.output.with_suffix(".progress.jsonl").read_text().splitlines()), 2)
-        self.assertFalse(self.output.with_suffix(".stage2.progress.jsonl").exists())
-        self.assertFalse(self.output.with_suffix(".stage2.md").exists())
+        store = self.store()
+        self.assertEqual(len(store.answers), 2)
+        self.assertTrue(all(set(levels) == {1} for levels in store.judgments.values()))
+        self.assertFalse(list(store.directory.glob("*.md")))
 
-    def test_second_level_resume_preserves_both_histories_and_completed_rerun(self):
-        original = rule_scoring.grade_rules
+    def test_second_level_resume_preserves_histories_without_reopening_the_dataset(self):
+        original = rule_scoring.grade_second_stage
         processed = []
 
         def interrupt(row):
@@ -90,64 +99,92 @@ class RuleEvaluationTests(unittest.TestCase):
             return original(row)
 
         with patch.object(evaluation, "generate_answers", return_value=self.answers), \
-                patch.object(rule_scoring, "grade_rules", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+                patch.object(rule_scoring, "grade_second_stage", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
             self.evaluate()
-        partial = json.loads(self.output.read_text())
-        self.assertEqual(partial["rule_scoring"]["completed_samples"], 1)
+        store = self.store()
+        partial = evaluation.saved_evaluation(store)
+        self.assertEqual(partial["rule_scoring"]["completed_samples"], 3)
         self.assertFalse(partial["rule_scoring"]["complete"])
-        with patch.object(rescoring, "APIJudge", side_effect=AssertionError("Local rules are incomplete")), \
-                self.assertRaisesRegex(ValueError, "Complete both local rule stages"):
-            rescoring.rescore_evaluation(self.output)
-        progress_path = self.output.with_suffix(".stage2.progress.jsonl")
-        old = json.loads(progress_path.read_text())
-        old["result"]["stages"]["stage1"]["reason"] = "historical decision must be reused"
-        progress_path.write_text(json.dumps(old) + "\n")
-        history = {suffix: self.output.with_suffix(suffix).read_bytes()
-                   for suffix in (".progress.jsonl", ".md", ".stage2.progress.jsonl", ".stage2.md")}
+        records = [json.loads(line) for line in store.judgments_path.read_text().splitlines()]
+        old = records[-1]
+        old["reason"] = "historical decision must be reused"
+        store.judgments_path.write_text("".join(json.dumps(row) + "\n" for row in records))
+        history = {path: path.read_bytes() for path in (store.answers_path, store.metadata_path, store.judgments_path)}
 
         def only_new(row):
             self.assertNotEqual(row["index"], old["index"])
             return original(row)
 
-        with patch.object(evaluation, "create_generator", side_effect=AssertionError("No generation on second-level resume")), \
-                patch.object(evaluation, "score_answer", side_effect=AssertionError("Saved first-level decisions are final")), \
-                patch.object(rule_scoring, "grade_rules", side_effect=only_new) as grade:
+        self.dataset = None
+        with patch.object(evaluation, "create_generator", side_effect=AssertionError("Already generated")), \
+                patch.object(evaluation, "score_answer", side_effect=AssertionError("Reuse stage one")), \
+                patch.object(evaluation, "prepare_dataset", side_effect=AssertionError("Use the snapshot")), \
+                patch.object(evaluation, "ensure_prepared_sft_data", side_effect=AssertionError("Use the snapshot")), \
+                patch.object(rule_scoring, "grade_second_stage", side_effect=only_new) as grade:
             report = self.evaluate()
-        self.assertEqual(grade.call_count, 3)
+        self.assertEqual(grade.call_count, 1)
         self.assertTrue(report["rule_scoring"]["complete"])
-        self.assertEqual(report["predictions"][0]["rule_scoring"], old["result"])
-        for suffix, prefix in history.items():
-            self.assertTrue(self.output.with_suffix(suffix).read_bytes().startswith(prefix))
-        for suffix in (".progress.jsonl", ".md"):
-            self.assertEqual(self.output.with_suffix(suffix).read_bytes(), history[suffix])
-        finished = {suffix: self.output.with_suffix(suffix).read_bytes() for suffix in history}
+        self.assertEqual(report["predictions"][old["index"]]["rule_scoring"]["stages"]["stage2"]["reason"], old["reason"])
+        for path, prefix in history.items():
+            self.assertTrue(path.read_bytes().startswith(prefix))
+        for path in (store.answers_path, store.metadata_path):
+            self.assertEqual(path.read_bytes(), history[path])
+        finished = {path: path.read_bytes() for path in history}
         with patch.object(evaluation, "create_generator", side_effect=AssertionError("Already generated")), \
                 patch.object(evaluation, "score_answer", side_effect=AssertionError("No first-level rescoring")), \
-                patch.object(rule_scoring, "grade_rules", side_effect=AssertionError("No second-level rescoring")), \
-                patch.object(rule_scoring, "readable_rule_result", side_effect=AssertionError("No old Markdown rendering")):
+                patch.object(rule_scoring, "grade_second_stage", side_effect=AssertionError("No second-level rescoring")):
             repeated = self.evaluate()
         self.assertEqual(repeated["predictions"], report["predictions"])
-        self.assertEqual({suffix: self.output.with_suffix(suffix).read_bytes() for suffix in history}, finished)
+        self.assertEqual({path: path.read_bytes() for path in history}, finished)
 
-    def test_flushed_second_level_decision_is_reused_after_markdown_failure(self):
+    def test_flushed_second_level_decision_survives_failure_after_the_write(self):
+        original = evaluation.EvaluationStore.save_judgment
+
+        def interrupt(store, index, stage, result):
+            original(store, index, stage, result)
+            if stage == 2:
+                raise KeyboardInterrupt
+
         with patch.object(evaluation, "generate_answers", return_value=self.answers), \
-                patch.object(rule_scoring, "readable_rule_result", side_effect=OSError("disk error")), \
-                self.assertRaises(OSError):
+                patch.object(evaluation.EvaluationStore, "save_judgment", new=interrupt), self.assertRaises(KeyboardInterrupt):
             self.evaluate()
-        old = json.loads(self.output.with_suffix(".stage2.progress.jsonl").read_text())
-        prefix = self.output.with_suffix(".stage2.md").read_bytes()
-        original = rule_scoring.grade_rules
+        store = self.store()
+        saved = store.judgments_path.read_bytes()
+        original_grade = rule_scoring.grade_second_stage
 
         def only_new(row):
-            self.assertNotEqual(row["index"], old["index"])
-            return original(row)
+            self.assertNotIn(2, store.judgments.get(row["index"], {}))
+            return original_grade(row)
 
         with patch.object(evaluation, "create_generator", side_effect=AssertionError("Already generated")), \
-                patch.object(rule_scoring, "grade_rules", side_effect=only_new):
+                patch.object(rule_scoring, "grade_second_stage", side_effect=only_new) as grade:
             self.evaluate()
-        markdown = self.output.with_suffix(".stage2.md").read_text()
-        self.assertTrue(self.output.with_suffix(".stage2.md").read_bytes().startswith(prefix))
-        self.assertNotIn(f"## Dataset index {old['index']}\n", markdown)
+        self.assertEqual(grade.call_count, 1)
+        self.assertTrue(store.judgments_path.read_bytes().startswith(saved))
+
+    def test_answer_saved_before_missing_first_decision_is_not_generated_again(self):
+        original = evaluation.score_answer
+        calls = []
+
+        def interrupt(*args):
+            calls.append(args)
+            if len(calls) == 4:
+                raise KeyboardInterrupt
+            return original(*args)
+
+        with patch.object(evaluation, "generate_answers", return_value=self.answers), \
+                patch.object(evaluation, "score_answer", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+            self.evaluate()
+        store = self.store()
+        self.assertEqual(len(store.answers), 4)
+        self.assertEqual(len(store.judgments), 3)
+        saved_answers = store.answers_path.read_bytes()
+        with patch.object(evaluation, "create_generator", side_effect=AssertionError("Saved answers cannot be regenerated")), \
+                patch.object(evaluation, "score_answer", wraps=original) as score:
+            report = self.evaluate()
+        score.assert_called_once()
+        self.assertTrue(report["rule_scoring"]["complete"])
+        self.assertEqual(store.answers_path.read_bytes(), saved_answers)
 
     def test_existing_rescoring_uses_saved_local_decisions_without_repeating_rules(self):
         with patch.object(evaluation, "generate_answers", return_value=self.answers):
@@ -159,6 +196,19 @@ class RuleEvaluationTests(unittest.TestCase):
         self.assertEqual(judge.call_count, 1)
         self.assertEqual([result["decision_stage"] for result in results], [1, 2, 1, 3])
         self.assertEqual(report, before, "API results must not mutate saved local decisions")
+
+    def test_default_full_evaluation_resumes_without_the_original_dataset(self):
+        options = dict(model_name=self.fixture.model_name, tokenizer=self.fixture.tokenizer,
+                       config=self.fixture.config, device="cpu", generation_backend="transformers", disable_tqdm=True)
+        with redirect_stdout(io.StringIO()), patch.object(evaluation, "generate_answers", return_value=self.answers):
+            original = evaluation.evaluate_checkpoint(model=self.model, dataset=self.dataset, data_info=self.info, **options)
+        with redirect_stdout(io.StringIO()), \
+                patch.object(evaluation, "create_generator", side_effect=AssertionError("Reuse all generated answers")), \
+                patch.object(evaluation, "prepare_dataset", side_effect=AssertionError("Original data unavailable")), \
+                patch.object(evaluation, "ensure_prepared_sft_data", side_effect=AssertionError("No cache preparation")), \
+                patch.object(evaluation, "score_answer", side_effect=AssertionError("Reuse all first decisions")):
+            repeated = evaluation.evaluate_checkpoint(**options)
+        self.assertEqual(original, repeated)
 
     def test_gsm8k_remains_on_its_existing_basic_evaluation_path(self):
         self.fixture.config["data"] = dict(math_data.GSM8K)

@@ -93,7 +93,8 @@ class GenerationTests(unittest.TestCase):
         self.fixture.raw = [fixtures.raw_row(i) for i in range(60)]
         dataset, info = self.fixture.prepared()
         output = self.root / "resume.json"
-        progress_path, readable_path = output.with_suffix(".progress.jsonl"), output.with_suffix(".md")
+        progress_path = output.with_suffix("") / "answers.jsonl"
+        metadata_path = output.with_suffix("") / "metadata.json"
         failure = RuntimeError("vLLM worker failed")
         engine = Mock(initialization_runtime=0.0, description={"backend": "vllm"})
         engine.generate.side_effect = [[("invalid", 4, True)] * 2, failure]
@@ -104,7 +105,7 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual([len(call.args[0]) for call in engine.generate.call_args_list], [2, 2])
         engine.recover.assert_not_called()
         engine.close.assert_called_once()
-        saved, readable = progress_path.read_bytes(), readable_path.read_bytes()
+        saved, metadata = progress_path.read_bytes(), metadata_path.read_bytes()
         self.assertEqual(len(saved.splitlines()), 2)
 
         resumed = Mock(initialization_runtime=0.0, description={"backend": "vllm"})
@@ -114,10 +115,11 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual([len(call.args[0]) for call in resumed.generate.call_args_list], [3, 1])
         self.assertEqual(resumed.generate.call_args_list[0].args[0][:2], engine.generate.call_args_list[1].args[0])
         self.assertTrue(progress_path.read_bytes().startswith(saved))
-        self.assertTrue(readable_path.read_bytes().startswith(readable))
+        self.assertEqual(metadata_path.read_bytes(), metadata)
+        self.assertFalse(list(output.with_suffix("").glob("*.md")))
         self.assertEqual([row["index"] for row in report["predictions"]], report["data"]["indices"])
         self.assertEqual([row["generation_batch_size"] for row in report["predictions"]], [2, 2, 3, 3, 3, 1])
-        self.assertEqual(report["generation"]["batch_size"], 3)
+        self.assertEqual(report["generation"]["batch_size"], 2)
         resumed.recover.assert_not_called()
 
     def test_vllm_rejects_adaptive_batches_before_loading_sources_or_creating_outputs(self):
@@ -181,7 +183,7 @@ class GenerationTests(unittest.TestCase):
             with patch.object(evaluation, "read_source", return_value=(vllm_final, metadata, None)), \
                     patch.object(training_common.os, "execv", side_effect=execute):
                 training_common.exec_final_evaluation(vllm_final, generation_backend="vllm")
-        report = json.loads(next((vllm_final.parent / "evaluations").glob("*.json")).read_text())
+        report = fixtures.stored_evaluation(next((vllm_final.parent / "evaluations").glob("*/metadata.json")).parent)
         self.assertEqual(report["generation"]["batch_size"], 64)
         self.assertFalse(report["generation"]["auto_batch_size"])
 
@@ -322,7 +324,8 @@ class GenerationTests(unittest.TestCase):
                                                     generation_backend="transformers", output=self.root / "evaluation.json",
                                                     disable_tqdm=True)
         self.assertEqual(report["data"]["fingerprint"], dataset._fingerprint)
-        self.assertEqual(report["data"]["indices"], data_plan(dataset, None, info)["validation_indices"])
+        expected = dataset.select(data_plan(dataset, None, info)["validation_indices"])
+        self.assertEqual([row["source_index"] for row in report["predictions"]], list(expected["source_index"]))
 
     def test_grpo_translates_generation_parameters_and_keeps_native_for_old_config(self):
         common = dict(num_generations=2, max_completion_length=4, per_device_train_batch_size=1,

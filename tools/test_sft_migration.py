@@ -50,6 +50,13 @@ class MigrationTests(unittest.TestCase):
         target = Path(command[command.index("--output") + 1])
         save_prepared_sft_data(target, self.dataset, self.info, self.fixture.config, self.fixture.tokenizer)
 
+    def assert_held_out_snapshot(self, report):
+        expected = self.dataset.select(self.metadata["data"]["validation_indices"])
+        actual = [(row["source_index"], row["generation_index"], row["question"],
+                   row["reference_answer"], row["reference_final_answer"]) for row in report["predictions"]]
+        self.assertEqual(actual, [(row["source_index"], row["generation_index"], row["question"],
+                                   row["answer"], row["final_answer"]) for row in expected])
+
     def test_publish_then_reuse_without_conda_or_worker(self):
         original = {p.name: p.read_bytes() for p in self.source.iterdir() if p.is_file()}
         with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")) as ensure, \
@@ -77,7 +84,7 @@ class MigrationTests(unittest.TestCase):
                     device="cpu", generation_backend="transformers", disable_tqdm=True,
                     output=self.root / ("original.json" if "model_name" in kwargs else "sft.json"))
                 self.assertEqual(report["prepared_sft_data"], str(self.target))
-                self.assertEqual(report["data"]["indices"], self.metadata["data"]["validation_indices"])
+                self.assert_held_out_snapshot(report)
 
     def test_missing_legacy_cache_automatically_prepares(self):
         with patch.object(migration, "migrate_sft", return_value=self.target) as prepare:
@@ -173,7 +180,7 @@ class MigrationTests(unittest.TestCase):
                     report = evaluation.evaluate_checkpoint(post, model=self.fixture.model_loader(self.fixture.model_name),
                         device="cpu", generation_backend="transformers", disable_tqdm=True, output=self.root / f"{stage}.json")
                 self.assertEqual(report["prepared_sft_data"], str(self.target))
-                self.assertEqual(report["data"]["indices"], self.metadata["data"]["validation_indices"])
+                self.assert_held_out_snapshot(report)
 
     def test_worker_failure_does_not_publish_and_can_retry(self):
         with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
