@@ -8,8 +8,13 @@ from pathlib import Path
 from utils.arguments import add_generation_arguments, add_prepared_data_argument
 from utils.paths import CONFIG_DIR, GENERATION_CONFIG, ROOT
 
+FINAL_EVALUATION_FLAG = "--evaluate-saved-training"
+
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == FINAL_EVALUATION_FLAG:
+        return saved_evaluation_main(argv[1:])
     parser = argparse.ArgumentParser(description="Train an SFT, DPO, or GRPO LoRA adapter.")
     stages = parser.add_subparsers(dest="stage", required=True)
     for stage in ("sft", "dpo", "grpo"):
@@ -52,29 +57,59 @@ def main(argv=None):
 
 def evaluate_after_training(final_dir, settings, *, model, tokenizer, dataset, data_info=None,
                             disable_tqdm=False, generation_config=None, training_uses_vllm=False):
-    """Reuse the trained model for native evaluation; fresh-process evaluation follows main()."""
+    """Reuse native weights for local evaluation and summary; vLLM follows in a fresh process."""
     if settings["backend"] == "transformers" and not training_uses_vllm:
-        from evaluate_checkpoint import evaluate_checkpoint
-        return evaluate_checkpoint(
+        return evaluate_saved_training(
             final_dir, model=model, tokenizer=tokenizer, dataset=dataset, data_info=data_info,
             disable_tqdm=disable_tqdm, generation_config=generation_config,
             generation_backend="transformers",
         )
 
 
+def evaluate_saved_training(final_dir, **evaluation_options):
+    from evaluate_checkpoint import evaluate_checkpoint
+    try:
+        report = evaluate_checkpoint(final_dir, **evaluation_options)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise RuntimeError(f"Local evaluation failed; training is saved at {final_dir}. "
+                           f"Run evaluate_checkpoint.py --checkpoint {final_dir} with the same generation settings, "
+                           "then summarize_evaluation.py --evaluation <evaluation-directory>.") from error
+    from summarize_evaluation import summarize_evaluation
+    try:
+        summarize_evaluation(report["directory"], disable_tqdm=evaluation_options.get("disable_tqdm", False))
+    except (OSError, ValueError, RuntimeError) as error:
+        raise RuntimeError(f"Scoring or report generation failed; training is saved at {final_dir}, "
+                           f"and local evaluation at {report['directory']}. "
+                           "Continue with summarize_evaluation.py --resume-from <scoring-run printed above>; "
+                           "add --no-api to inspect saved results.") from error
+    return report
+
+
+def saved_evaluation_main(argv):
+    """Internal continuation after execv; keep standalone evaluation limited to local rules."""
+    parser = argparse.ArgumentParser(description="Complete evaluation and summary after saved training.")
+    parser.add_argument("--checkpoint", type=Path, required=True)
+    add_generation_arguments(parser)
+    add_prepared_data_argument(parser)
+    args = parser.parse_args(argv)
+    return evaluate_saved_training(args.checkpoint, generation_config=args.generation_config,
+                                   generation_backend=args.generation_backend, prepared_sft_data=args.prepared_sft_data)
+
+
 def exec_final_evaluation(final_dir, generation_config=None, generation_backend=None, prepared_sft_data=None):
     """Replace the training process so no training CUDA context survives into vLLM."""
-    args = [sys.executable, str(ROOT / "evaluate_checkpoint.py"),
+    args = [sys.executable, str(ROOT / "train.py"), FINAL_EVALUATION_FLAG,
             "--checkpoint", str(final_dir), "--generation-config", str(generation_config or GENERATION_CONFIG)]
     if generation_backend:
         args.extend(["--generation-backend", generation_backend])
     if prepared_sft_data:
         args.extend(["--prepared-sft-data", str(prepared_sft_data)])
-    print(f"Starting saved-checkpoint evaluation: {final_dir}", flush=True)
+    print(f"Starting saved-checkpoint evaluation and summary: {final_dir}", flush=True)
     try:
         os.execv(sys.executable, args)
     except OSError as error:
-        raise RuntimeError(f"Training is saved at {final_dir}; run evaluate_checkpoint.py --checkpoint {final_dir} separately.") from error
+        raise RuntimeError(f"Training is saved at {final_dir}; run evaluate_checkpoint.py --checkpoint {final_dir}, "
+                           "then summarize_evaluation.py --evaluation <evaluation-directory> separately.") from error
 
 
 def load_training_model(config, source_path=None):

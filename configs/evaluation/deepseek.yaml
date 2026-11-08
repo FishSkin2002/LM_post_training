@@ -1,4 +1,4 @@
-# Official DeepSeek Chat Completions judge. The key is read only from the environment.
+# Official DeepSeek Chat Completions judge. Credentials are supplied at runtime.
 base_url: https://api.deepseek.com
 model: deepseek-flash
 api_key_env: DEEPSEEK_API_KEY

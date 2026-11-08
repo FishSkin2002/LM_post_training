@@ -1,5 +1,16 @@
 # 当前进展
 
+## 2026-11-09：训练结束自动评测与汇总
+
+- 用户要求继续，提交关系确认 PR65/773663a 已合入 main/8f7d342，受控入口创建 `codex/training-final-summary`。一次 open 查询仅见其他任务 PR33，未读取 PR 内容或评审。
+- 本轮沿用 planning-with-files-zh 与 writing-for-agents 维护规划，只接通训练结束编排；用户研究文件与历史报告保留。
+- 已在 train.py 统一串联保存后的一二级与默认汇总。原生路径复用训练模型；vLLM 或训练期 GRPO 引擎需要释放时，execv 进入 train.py 内部续程，在新进程中完成完整后续链路。单独 evaluate_checkpoint.py 不启动汇总。
+- 评测仅在返回的内存视图增加实际目录，未重复保存元数据或问答。失败消息给出 final/、本地评测位置与独立继续方法；汇总失败后可直接选择已打印评分运行继续，不重新训练。
+- 八模块 112 项离线/微型检查一次通过（27.139s，`/tmp/qwen-training-final-summary-tests.log`）。新增核查覆盖实际保存后才请求模拟 API、取消密钥后用 --no-api 恢复、GRPO 训练 vLLM/原生评测交接、execv 失败无原进程回退；既有 SFT/DPO/GRPO 微型训练均生成阅读报告。
+- README 已说明训练结束默认 API 汇总与失败恢复；裁判配置注释同步为运行时提供凭据。未启动真实大模型训练或付费 API，未修改历史 reports/outputs 与用户研究文件。
+- Python 语法、git diff --check、README 三个本地链接与裁判 YAML 语义一致性检查通过，配置数值与此前版本相同；准备交付本轮自动编排功能。
+- 功能提交 92225fe 已通过受控入口正常推送并创建 [PR66](https://github.com/FishSkin2002/LM_post_training/pull/66)。本轮训练结束自动链路完成，等待用户审查合入；评测产物精简的已确认实现步骤已全部交付，不跨到其他训练或研究任务。
+
 ## 2026-11-09：可选 API 汇总与阅读报告实现
 
 - 用户要求继续，提交关系确认 PR64/adac06e 已合入 main/a9b1b9a；受控入口创建 `codex/evaluation-summary-reports`。一次 open 查询仅见其他任务 PR33，未读取 PR 内容或评审。
