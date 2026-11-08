@@ -1,5 +1,15 @@
 # 当前实现发现
 
+## 评测产物精简调查（2026-11-09）
+
+- 只读调查的报告位于另一工作树 `/home/yunli/code/qwen/FishSkin2002/outputs`，本任务修改 Codex 工作树中的要求，不修改该目录。现存五份评估 JSON 各自 6447 条 `generation_engine` 完全相同，内嵌的 `runtime` 是环境对象；每题实际耗时为另一个变化字段 `generation_runtime`。
+- 原始与三级 Markdown 重复保存整套问答，API 核查 Markdown 再复制子集；三级 JSON 同一条记录同时含 `rule_scoring.stages` 与 `stages`。现有 `data.indices` 纵向列出 6447 项。
+- `index` 是处理后数据集行号；`source_index` 和 `generation_index` 才能从原始 OpenR1 找回当时的题目及选定 R1 解答。旧报告保存浮动 `revision: main` 与训练机 prepared 路径，本机没有对应样本缓存。用户据此选择导出冻结的完整评测样本快照，不再依赖后续重读原数据集。
+- 项目尚无公共 data/datasets 目录；生成数据集中在已被 Git 忽略的 `outputs/`。已确认公共快照使用 `outputs/evaluation-datasets/<快照标识>.json`，相对于项目根目录解析，与各训练运行目录分离；不另存 indices.json。
+- 最新设计替代旧约定中的独立三级/独立汇总两个入口、生成阶段写 Markdown、Markdown 只追加。目标为 `summarize_evaluation.py` 默认补做三级再汇总，`--no-api` 只汇总已保存判决；API 中断仅保存机器进度，人工判决回写留后续。
+- 相关旧表述分布于 evaluation-rescoring、project-layout、training-workflow、post-training-workflow、vllm-generation、automatic-sft-migration；已统一改为引用新的 evaluation-artifacts，历史规划归档及反映当前实现的 README 保留原状。
+- 文档验证覆盖 8 份正式 Markdown 的 57 个本地链接与锚点；只读复核未发现漏项或冲突。本轮仅是要求交付，后续仍须验证真实新产物，不将文档检查当作实现验收。
+
 ## DeepSeek 最终答案裁判调查（2026-11-07）
 
 - utils/answer_judge.py 已使用兼容 Chat Completions 的标准库 HTTP 请求；现有模拟测试覆盖 GLM 和 DeepSeek，但默认配置、帮助和 README 仍为 GLM。
