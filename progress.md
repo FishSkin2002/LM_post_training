@@ -9,6 +9,7 @@
 - 八模块 112 项离线/微型检查一次通过（27.139s，`/tmp/qwen-training-final-summary-tests.log`）。新增核查覆盖实际保存后才请求模拟 API、取消密钥后用 --no-api 恢复、GRPO 训练 vLLM/原生评测交接、execv 失败无原进程回退；既有 SFT/DPO/GRPO 微型训练均生成阅读报告。
 - README 已说明训练结束默认 API 汇总与失败恢复；裁判配置注释同步为运行时提供凭据。未启动真实大模型训练或付费 API，未修改历史 reports/outputs 与用户研究文件。
 - Python 语法、git diff --check、README 三个本地链接与裁判 YAML 语义一致性检查通过，配置数值与此前版本相同；准备交付本轮自动编排功能。
+- 功能提交 92225fe 已通过受控入口正常推送并创建 [PR66](https://github.com/FishSkin2002/LM_post_training/pull/66)。本轮训练结束自动链路完成，等待用户审查合入；评测产物精简的已确认实现步骤已全部交付，不跨到其他训练或研究任务。
 
 ## 2026-11-09：可选 API 汇总与阅读报告实现
 
