@@ -6,11 +6,13 @@
 | --- | --- | --- |
 | 恢复与核对 | complete | 读取正式要求、规划和现有评测/测试，确认 PR63 合入，保留用户研究文件。 |
 | 机器产物实现 | complete | 已接通公共快照、一次性元数据、回答和逐级判决 JSONL，支持缺失判决补齐及无原始数据集续跑；一二级不生成 Markdown。 |
-| 验证与交付 | in_progress | 100 项离线/微型回归、CLI 帮助、语法、差异及 README 链接检查通过；准备提交、推送并发起功能 PR。 |
+| 验证与交付 | complete | 100 项离线/微型回归及必要检查通过；b062e3f 已正常推送并创建功能 PR64。 |
 
 本轮不修改 `/home/yunli/code/qwen/FishSkin2002/outputs` 中的旧报告，不运行真实权重或付费 API。现有 rescore 入口继续处理历史完整 JSON；新产物的汇总入口和阅读报告留待下一步，不把本轮称为全部报告功能完成。本轮一次 open 查询仅见其他任务 PR33。
 
 新评测目录只有 metadata.json、answers.jsonl、judgments.jsonl；题干与参考保存在项目级公共快照。旧格式报告或进度占用同名位置时要求选择新输出目录，保持旧文件并避免隐式重生成。README 已同步当前保存行为；验证日志为 `/tmp/qwen-machine-artifacts-tests.log`，最终 100 项检查在 27.303s 通过。
+
+本轮已交付 [PR64](https://github.com/FishSkin2002/LM_post_training/pull/64)。等待用户审查合入并说“继续”后，再从最新 main 推进汇总/API 与阅读报告，不在本轮扩展后续步骤。
 
 ## 已完成：精简评测产物要求
 

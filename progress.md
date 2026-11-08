@@ -10,6 +10,7 @@
 - 最终七模块 100 项离线/微型检查通过（27.303s，`/tmp/qwen-machine-artifacts-tests.log`），覆盖快照共享/并发发布/位置、默认与显式目录无原始数据集恢复、回答先落盘后补一级、二级中断、旧判决复用及训练后调用；旧 rescore 的模拟 API 检查继续通过。
 - CLI 帮助、Python 语法、`git diff --check` 和 README 的 3 个本地链接检查通过。README 已改为公共快照加三份运行文件，旧 rescore 明确用于历史完整 JSON；旧文件或进度占用同名位置时拒绝静默从头生成。
 - 本轮尚未实施 summarize_evaluation.py、真实 API 三级接入或 Markdown 阅读报告，原报告与用户研究文件未改动；准备交付当前保存/续跑步骤。
+- 功能提交 b062e3f 已通过受控入口正常推送并创建 [PR64](https://github.com/FishSkin2002/LM_post_training/pull/64)。当前保存与续跑步骤完成，等待用户审查合入及后续“继续”指令，再从最新 main 开始下一实现步骤。
 
 ## 2026-11-09：精简评测产物要求
 
