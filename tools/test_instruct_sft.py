@@ -50,6 +50,10 @@ def raw_row(index):
             "correctness_llama": None, "is_reasoning_complete": [True, True]}
 
 
+def stored_evaluation(path):
+    return evaluation.saved_evaluation(evaluation.EvaluationStore(path, root=evaluation.ROOT))
+
+
 class Interrupted(RuntimeError):
     pass
 
@@ -83,6 +87,9 @@ class InstructSFTTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        root_patch = patch.object(evaluation, "ROOT", self.root)
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
         native_config = self.root / "generation.yaml"
         native_config.write_text("backend: transformers\n")
         backend_patch = patch.object(generation, "GENERATION_CONFIG", native_config)
@@ -192,10 +199,10 @@ class InstructSFTTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as terminal, contextlib.redirect_stderr(io.StringIO()):
             evaluation.main()
         self.eval_terminal = terminal.getvalue()
-        return json.loads(path.read_text())
+        return stored_evaluation(path)
 
     def final(self, run):
-        return next((run/"evaluations").glob("*.json"))
+        return next((run/"evaluations").glob("*/metadata.json")).parent
 
     def test_chat_masks_preserve_original_problem_think_latex_and_one_eos(self):
         question = "  question {1}\n\n"
@@ -388,7 +395,7 @@ class InstructSFTTests(unittest.TestCase):
             run=self.run_training("end")
         self.assertEqual(called.call_count,1)
         self.assertEqual(len(self.model_calls),1)
-        report=json.loads(self.final(run).read_text())
+        report=stored_evaluation(self.final(run))
         self.assertEqual(report["metrics"]["answer_accuracy"],1)
         self.assertEqual(report["generation"]["batch_size"],4)
         self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],[2,2])
@@ -407,59 +414,52 @@ class InstructSFTTests(unittest.TestCase):
             question,=questions
             calls.append(question)
             if len(calls)==2:
-                records=[json.loads(x) for x in output.with_suffix(".progress.jsonl").read_text().splitlines()]
+                records=[json.loads(x) for x in (output.with_suffix("") / "answers.jsonl").read_text().splitlines()]
                 self.assertEqual(len(records),1)
-                self.assertIn(records[0]["question"],output.with_suffix(".md").read_text())
+                self.assertNotIn("question", records[0])
+                self.assertFalse(list(output.parent.rglob("*.md")))
                 raise Interrupted("during second question")
             return [(trace(question.rsplit(" ",1)[-1]),3,False)]
         with patch.object(evaluation,"generate_answers",side_effect=generate),self.assertRaises(Interrupted):
             self.evaluate(original=True,output=output,batch_size=1)
-        progress_path=output.with_suffix(".progress.jsonl")
+        progress_path=output.with_suffix("") / "answers.jsonl"
         old=json.loads(progress_path.read_text())
         del old["generation_batch_size"]
         progress_path.write_text(json.dumps(old)+"\n")
         first=progress_path.read_bytes()
-        markdown_prefix=output.with_suffix(".md").read_bytes()
+        metadata_path=output.with_suffix("") / "metadata.json"
+        metadata_prefix=metadata_path.read_bytes()
         def invalid(model,tokenizer,questions,budget):
             return [("invalid",4,True)]*len(questions)
-        original_render=evaluation.readable_prediction
-        def render_new_only(position,prediction):
-            self.assertGreater(position,0,"Historical Markdown must not be rendered again.")
-            return original_render(position,prediction)
         with patch.object(evaluation,"generate_answers",side_effect=invalid) as called, \
-                patch.object(evaluation,"readable_prediction",side_effect=render_new_only), \
                 patch.object(evaluation,"score_answer",wraps=scoring.score_answer) as score:
             report=self.evaluate(original=True,output=output)
         self.assertEqual(score.call_count,5)
         self.assertEqual([len(call.args[2]) for call in called.call_args_list],[4,1])
         self.assertEqual([question for call in called.call_args_list for question in call.args[2]],
-                         [self.raw[i]["problem"] for i in report["data"]["indices"][1:]])
+                         [row["question"] for row in report["predictions"][1:]])
         self.assertTrue(progress_path.read_bytes().startswith(first))
         self.assertEqual(report["metrics"]["answer_accuracy"],1/6)
         self.assertEqual(report["metrics"]["generation_truncation_rate"],5/6)
         self.assertEqual([row["generation_batch_size"] for row in report["predictions"]],[1,4,4,4,4,1])
-        self.assertEqual(output.with_suffix(".md").read_text().count("## Question "),6)
-        self.assertTrue(output.with_suffix(".md").read_bytes().startswith(markdown_prefix))
-        completed_markdown=output.with_suffix(".md").read_bytes()
+        self.assertFalse(list(output.parent.rglob("*.md")))
+        self.assertEqual(metadata_path.read_bytes(),metadata_prefix)
+        completed_answers=progress_path.read_bytes()
         with patch.object(evaluation,"generate_answers",side_effect=AssertionError("already complete")), \
-                patch.object(evaluation,"score_answer",side_effect=AssertionError("No historical rescoring")), \
-                patch.object(evaluation,"readable_prediction",side_effect=AssertionError("No historical Markdown rendering")):
+                patch.object(evaluation,"score_answer",side_effect=AssertionError("No historical rescoring")):
             again=self.evaluate(original=True,output=output)
         self.assertEqual(again["predictions"],report["predictions"])
         self.assertIn("6/6 completed",self.eval_terminal)
-        self.assertEqual(output.with_suffix(".md").read_bytes(),completed_markdown)
+        self.assertEqual(progress_path.read_bytes(),completed_answers)
 
-    def test_all_outcomes_and_summary_failure_reuse_saved_records(self):
+    def test_all_outcomes_reuse_saved_records_without_writing_a_summary(self):
         self.raw=[raw_row(i) for i in range(40)]
         output=self.root/"outcomes.json"
-        def fail_summary(path,*args,**kwargs):
-            if path==output: raise OSError("summary failure")
-            return original_write(path,*args,**kwargs)
-        original_write=Path.write_text
         answers=[(trace(i),4,False) for i in range(4)]
         answers[1]=(trace(999),4,False);answers[2]=("invalid",4,False);answers[3]=(trace(3),4,True)
-        with patch.object(evaluation,"generate_answers",return_value=answers),patch.object(Path,"write_text",new=fail_summary),self.assertRaises(SystemExit):
+        with patch.object(evaluation,"generate_answers",return_value=answers):
             self.evaluate(original=True,output=output)
+        self.assertFalse(output.exists())
         with patch.object(evaluation,"generate_answers",side_effect=AssertionError("must reuse")):
             report=self.evaluate(original=True,output=output)
         self.assertEqual(report["metrics"]["generation_samples"],4)
@@ -479,6 +479,8 @@ class InstructSFTTests(unittest.TestCase):
         for key in ("question","reference_answer","answer","generated_tokens","correct","format_valid","truncated"):
             self.assertEqual(left["predictions"][0][key],right["predictions"][0][key],key)
         self.assertEqual(left["data"],right["data"])
+        self.assertEqual(left["snapshot"],right["snapshot"])
+        self.assertEqual(len(list((self.root/"outputs/evaluation-datasets").glob("*.json"))),1)
         self.assertEqual(left["source_type"],"original")
         self.assertIsNone(left["checkpoint"])
         self.assertEqual(weights,(self.base/"model.safetensors").read_bytes())
@@ -549,10 +551,10 @@ class InstructSFTTests(unittest.TestCase):
             clock.perf_counter.side_effect = [0, 8, 8, 9, 9, 11, 11, 14, 14, 18, 18, 21, 21, 26]
             report = self.evaluate(original=True)
         self.assertEqual([len(call.args[2]) for call in called.call_args_list], [4, 1])
-        self.assertEqual([row["generation_runtime"] for row in report["predictions"]], [3, 4, 5, 6, 8])
+        self.assertEqual([row["generation_runtime"] for row in report["predictions"]], [2, 2, 2, 2, 3])
         self.assertEqual([row["generation_batch_size"] for row in report["predictions"]], [4, 4, 4, 4, 1])
-        self.assertEqual(report["metrics"]["generation_runtime"], 26)
-        self.assertEqual(report["metrics"]["generation_samples_per_second"], 5 / 26)
+        self.assertEqual(report["metrics"]["generation_runtime"], 11)
+        self.assertEqual(report["metrics"]["generation_samples_per_second"], 5 / 11)
 
     def test_adaptive_batch_doubles_then_falls_back_and_halves(self):
         self.raw = [raw_row(i) for i in range(290)]
@@ -588,7 +590,7 @@ class InstructSFTTests(unittest.TestCase):
     def test_adaptive_first_failure_and_single_question_error_preserve_progress(self):
         self.raw = [raw_row(i) for i in range(90)]
         output = self.root / "adaptive.json"
-        progress_path = output.with_suffix(".progress.jsonl")
+        progress_path = output.with_suffix("") / "answers.jsonl"
         failure = RuntimeError("one question still failed")
         attempts = []
 
@@ -607,7 +609,7 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(attempts[0][:2], attempts[1])
         self.assertEqual(attempts[3][:1], attempts[4])
         first = progress_path.read_bytes()
-        saved_questions = [json.loads(line)["question"] for line in first.splitlines()]
+        saved_questions = [row["question"] for row in evaluation.EvaluationStore(output, root=self.root).predictions()]
         self.assertEqual(saved_questions, attempts[1] + attempts[2] + attempts[4])
         def finish(model, tokenizer, questions, budget):
             return [("invalid", 4, True)] * len(questions)
@@ -618,7 +620,7 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(list(called.call_args_list[0].args[2])[:1], attempts[-1])
         self.assertTrue(progress_path.read_bytes().startswith(first))
         self.assertEqual(report["metrics"]["generation_samples"], 9)
-        self.assertEqual(report["generation"]["batch_size"], 3)
+        self.assertEqual(report["generation"]["batch_size"], 4)
 
     def test_adaptive_failed_short_tail_halves_the_actual_batch(self):
         self.raw = [raw_row(i) for i in range(60)]
@@ -644,7 +646,8 @@ class InstructSFTTests(unittest.TestCase):
             with self.assertRaisesRegex(Interrupted, "scoring failed"):
                 self.evaluate(original=True, output=output, auto_batch_size=True)
         generated.assert_called_once()
-        self.assertEqual(len(output.with_suffix(".progress.jsonl").read_text().splitlines()), 1)
+        self.assertEqual(len((output.with_suffix("") / "answers.jsonl").read_text().splitlines()), 2)
+        self.assertEqual(len((output.with_suffix("") / "judgments.jsonl").read_text().splitlines()), 1)
 
     def test_interruption_skips_evaluation_and_failed_final_evaluation_is_retryable(self):
         with patch.object(train_sft,"evaluate_after_training") as called,self.assertRaises(Interrupted):
@@ -691,9 +694,9 @@ class InstructSFTTests(unittest.TestCase):
                 patch.object(evaluation,"generate_answers",return_value=[(trace(1),4,False)]*2),contextlib.redirect_stdout(io.StringIO()):
             report=evaluation.evaluate_checkpoint(model_name=self.model_name,model=model,tokenizer=self.tokenizer,
                 dataset=ds,data_info=info,config=self.config,device="cpu",disable_tqdm=True)
-        output=self.root/"outputs/evaluations/original-Qwen3-4B-Instruct-2507-OpenR1-Math-220k-default-train-n2.json"
-        self.assertTrue(output.is_file())
-        self.assertEqual(json.loads(output.read_text()),report)
+        output=self.root/"outputs/evaluations/original-Qwen3-4B-Instruct-2507-OpenR1-Math-220k-default-train-n2"
+        self.assertTrue((output / "metadata.json").is_file())
+        self.assertEqual(stored_evaluation(output),report)
 
     def test_argument_precision_and_atomic_directory_boundaries(self):
         for options in [("--continue-from","/missing"),("--additional-epochs","1"),

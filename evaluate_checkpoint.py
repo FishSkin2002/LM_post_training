@@ -3,7 +3,6 @@
 import argparse
 import json
 from pathlib import Path
-from textwrap import indent
 import time
 
 from datasets.fingerprint import Hasher
@@ -16,7 +15,8 @@ from utils.math_scoring import SCORING, score_answer
 from utils.math_data import OPENR1, dataset_label
 from utils.generation import add_generation_arguments, create_generator, generate_answers, load_generation_config
 from utils.paths import ROOT
-from utils.rule_scoring import apply_rule_scoring
+from utils.evaluation_artifacts import EvaluationStore
+from utils.rule_scoring import PROTOCOL, apply_rule_scoring, saved_rule_result
 from utils.prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
 from utils.training_workflow import data_plan, format_metrics, read_source
 
@@ -33,18 +33,37 @@ def answer_metrics(results):
     }
 
 
-def readable_prediction(position, prediction):
-    return (
-        f"## Question {position + 1} (dataset index {prediction['index']})\n\n"
-        f"Correct: {prediction['correct']} | Format valid: {prediction['format_valid']} | "
-        f"Truncated: {prediction['truncated']}\n\n"
-        f"Generated tokens: {prediction['generated_tokens']} | Batch size: {prediction['generation_batch_size']} | "
-        f"Generation time share: {prediction['generation_runtime']:.3f} s\n\n"
-        f"### Question\n\n{indent(prediction['question'], '    ')}\n\n"
-        f"### Reference answer\n\n{indent(prediction['reference_answer'], '    ')}\n\n"
-        f"### Reference final answer\n\n{indent(prediction['reference_final_answer'], '    ')}\n\n"
-        f"### Model answer\n\n{indent(prediction['answer'], '    ')}\n\n---\n\n"
-    )
+def saved_evaluation(store):
+    """Return an in-memory view for existing callers, without writing a summary file."""
+    predictions = store.predictions()
+    metrics = answer_metrics([(row["correct"], row["format_valid"], row["truncated"]) for row in predictions])
+    elapsed = sum(row["generation_runtime"] for row in predictions)
+    metrics.update(generation_runtime=elapsed,
+                   generation_samples_per_second=len(predictions) / max(elapsed, 1e-9),
+                   generation_initialization_runtime=store.metadata["generation_initialization_runtime"])
+    report = {**store.metadata, "data": {**store.metadata["data"], "indices": [row["index"] for row in store.samples]},
+              "metrics": metrics, "predictions": predictions}
+    if report["data"]["source"]["name"] == OPENR1["name"]:
+        completed = 0
+        for row in predictions:
+            judgments = store.judgments.get(row["index"], {})
+            row["rule_scoring"] = saved_rule_result(row, judgments)
+            completed += row["correct"] or row["truncated"] or 2 in judgments
+        report["rule_scoring"] = {"protocol": PROTOCOL, "completed_samples": completed,
+                                  "total_samples": len(store.samples), "complete": completed == len(store.samples),
+                                  "progress_file": str(store.judgments_path)}
+    return report
+
+
+def save_first_stage(store, answer):
+    sample = store.samples[answer["index"]]
+    started = time.perf_counter()
+    correct, valid, truncated = score_answer(answer["answer"], sample["reference_final_answer"], answer["truncated"])
+    reason = ("truncated" if truncated else "saved_reference_pass" if correct else
+              "saved_reference_failure" if valid else "saved_invalid_model_box")
+    store.save_judgment(answer["index"], 1,
+                        {"status": "passed" if correct else "failed", "reason": reason,
+                         "format_valid": valid, "runtime": time.perf_counter() - started})
 
 
 def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, output=None, device=None,
@@ -90,20 +109,8 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         raise ValueError("Source tokenizer template differs.")
     source_type = "lora" if checkpoint is not None else "original"
     data_source = sft_source or checkpoint
-    if dataset is None:
-        prepared_sft_data = ensure_prepared_sft_data(data_source, metadata, prepared_sft_data,
-                                                    metadata.get("prepared_sft_data") if metadata else None)
-        dataset, data_info = (load_prepared_sft_data(prepared_sft_data, config, tokenizer) if prepared_sft_data
-                              else prepare_dataset(config, tokenizer))
-    elif data_info is None and metadata is not None:
-        data_info = metadata["data"]["source"]
-    plan = data_plan(dataset, metadata, data_info)
-    indices = plan["validation_indices"]
-    if num_samples is not None:
-        if num_samples <= 0 or num_samples > len(indices):
-            raise ValueError(f"num-samples must be between 1 and {len(indices)}; omit it for the full validation set.")
-        indices = indices[:num_samples]
-    rows = dataset.select(indices)
+    if num_samples is not None and (type(num_samples) is not int or num_samples <= 0):
+        raise ValueError("num-samples must be a positive integer; omit it for the full validation set.")
     if checkpoint is not None:
         directory = checkpoint.parent / "evaluations"
         label = checkpoint.name
@@ -111,53 +118,90 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         directory = ROOT / "outputs" / "evaluations"
         label = f"original-{model_name.rsplit('/', 1)[-1]}"
         if sft_source is not None:
-            identity = Hasher.hash((plan["fingerprint"], indices, config["max_new_tokens"], config.get("bf16", False)))
+            selected = metadata["data"]["validation_indices"]
+            if num_samples is not None:
+                selected = selected[:num_samples]
+            identity = Hasher.hash((metadata["data"]["fingerprint"], selected,
+                                    config["max_new_tokens"], config.get("bf16", False)))
             label += f"-{identity}"
     data_label = dataset_label(config["data"])
-    output = Path(output).expanduser().resolve() if output else directory / f"{label}-{data_label}-n{len(rows)}.json"
-    progress_path = output.with_suffix(".progress.jsonl")
-    readable_path = output.with_suffix(".md")
-    predictions = []
-    if progress_path.is_file():
-        with progress_path.open(encoding="utf-8") as saved:
-            predictions = [json.loads(line) for line in saved]
-        for prediction in predictions:
-            prediction.setdefault("generation_batch_size", 1)
-    print(f"Generation progress: {len(predictions)}/{len(rows)} completed; {progress_path}", flush=True)
+    prefix = f"{label}-{data_label}-n"
+    if output is None and num_samples is not None:
+        output = directory / f"{prefix}{num_samples}"
+    if output is None:
+        # Locate a previous full evaluation by its metadata, without reopening the source dataset.
+        for path in sorted(directory.glob(f"{prefix}*/metadata.json")):
+            candidate = json.loads(path.read_text(encoding="utf-8"))
+            if candidate["data"].get("requested_num_samples") is None:
+                output = path.parent
+                break
+    store = EvaluationStore(output, root=ROOT) if output is not None else None
+    if store is not None and store.metadata is not None:
+        rows = store.samples
+        plan = store.metadata["data"]
+    else:
+        if dataset is None:
+            prepared_sft_data = ensure_prepared_sft_data(data_source, metadata, prepared_sft_data,
+                                                        metadata.get("prepared_sft_data") if metadata else None)
+            dataset, data_info = (load_prepared_sft_data(prepared_sft_data, config, tokenizer) if prepared_sft_data
+                                  else prepare_dataset(config, tokenizer))
+        elif data_info is None and metadata is not None:
+            data_info = metadata["data"]["source"]
+        plan = data_plan(dataset, metadata, data_info)
+        indices = plan["validation_indices"]
+        if num_samples is not None:
+            if num_samples > len(indices):
+                raise ValueError(f"num-samples must be between 1 and {len(indices)}; omit it for the full validation set.")
+            indices = indices[:num_samples]
+        rows = list(dataset.select(indices))
+        store = store or EvaluationStore(directory / f"{prefix}{len(rows)}", root=ROOT)
+    print(f"Generation progress: {len(store.answers)}/{len(rows)} completed; {store.answers_path}", flush=True)
     batch_mode = "adaptive" if auto_batch_size else "fixed"
     print(f"Generation batch size: {batch_size} ({batch_mode})", flush=True)
-    print(f"Readable answers: {readable_path}", flush=True)
     generator = None
-    if len(predictions) < len(rows):
-        generator = create_generator(model_name, checkpoint, tokenizer, config, generation_settings, device, model=model)
-        if generation_settings["backend"] == "transformers":
-            model = generator.model
-        print(f"Generation engine: {generator.description}", flush=True)
     try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with progress_path.open("a", encoding="utf-8") as saved, \
-                readable_path.open("a", encoding="utf-8") as readable, tqdm(
-                total=len(rows), initial=len(predictions), desc="Generate validation answers",
+        # A previous interruption may have saved an answer before saving its first decision.
+        for answer in store.answers:
+            if 1 not in store.judgments.get(answer["index"], {}):
+                save_first_stage(store, answer)
+        if len(store.answers) < len(rows):
+            generator = create_generator(model_name, checkpoint, tokenizer, config, generation_settings, device, model=model)
+            if generation_settings["backend"] == "transformers":
+                model = generator.model
+            print(f"Generation engine: {generator.description}", flush=True)
+        store.create(rows, {
+            "source_type": source_type, "stage": stage, "model_name": model_name,
+            "checkpoint": str(checkpoint) if checkpoint is not None else None,
+            "sft_source": str(sft_source) if sft_source is not None else None,
+            "prepared_sft_data": str(prepared_sft_data) if prepared_sft_data else None,
+            "data": {"source": plan["source"], "split": "validation", "fingerprint": plan["fingerprint"],
+                     "split_seed": plan["split_seed"], "requested_num_samples": num_samples},
+            "text_format": text_format(tokenizer), "precision": "bf16" if config.get("bf16") else "fp32",
+            "generation": {"do_sample": False, "max_new_tokens": config["max_new_tokens"],
+                           "eos_token_id": tokenizer.eos_token_id, "batch_size": batch_size,
+                           "auto_batch_size": auto_batch_size, "requested_backend": generation_settings["backend"],
+                           "engine": generator.description if generator else None},
+            "generation_initialization_runtime": generator.initialization_runtime if generator else 0,
+            "scoring": SCORING,
+        })
+        with tqdm(total=len(rows), initial=len(store.answers), desc="Generate validation answers",
                 unit="question", disable=disable_tqdm) as progress:
-            if readable.tell() == 0:
-                readable.write(f"# Math generation evaluation ({data_label})\n\nSource type: {source_type}\n\nStage: {stage}\n\n"
-                               f"Model: `{model_name}`\n\nSource: `{checkpoint or model_name}`\n\n")
-            readable.flush()
             next_batch_size = batch_size
             last_successful_size = 0
             probing = auto_batch_size
-            while len(predictions) < len(rows):
-                start = len(predictions)
+            while len(store.answers) < len(rows):
+                start = len(store.answers)
                 while True:
                     actual_batch_size = min(next_batch_size, len(rows) - start)
-                    batch = rows.select(range(start, start + actual_batch_size))
+                    batch = store.samples[start:start + actual_batch_size]
+                    questions = [row["question"] for row in batch]
                     started = time.perf_counter()
                     initialization_before = generator.initialization_runtime
                     try:
                         if generation_settings["backend"] == "transformers":
-                            answers = generate_answers(model, tokenizer, batch["question"], config["max_new_tokens"])
+                            answers = generate_answers(model, tokenizer, questions, config["max_new_tokens"])
                         else:
-                            answers = generator.generate(batch["question"], config["max_new_tokens"])
+                            answers = generator.generate(questions, config["max_new_tokens"])
                         if len(answers) != actual_batch_size:
                             raise RuntimeError(f"Generation returned {len(answers)} answers for {actual_batch_size} questions.")
                     except Exception as error:
@@ -179,55 +223,23 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                 if probing:
                     last_successful_size = actual_batch_size
                     next_batch_size = actual_batch_size * 2
-                for position, (row, answer) in enumerate(zip(batch, answers, strict=True), start=start):
+                for row, answer in zip(batch, answers, strict=True):
                     text, count, truncated = answer
-                    started = time.perf_counter()
-                    correct, valid, truncated = score_answer(text, row["final_answer"], truncated)
-                    score_time = time.perf_counter() - started
-                    prediction = {"index": indices[position], "question": row["question"],
-                                  "source_index": row["source_index"], "generation_index": row["generation_index"],
-                                  "reference_answer": row["answer"], "reference_final_answer": row["final_answer"],
-                                  "answer": text, "generated_tokens": count, "correct": correct,
-                                  "format_valid": valid, "truncated": truncated,
+                    prediction = {"index": row["index"], "answer": text, "generated_tokens": count,
+                                  "truncated": truncated,
                                   "generation_batch_size": actual_batch_size,
-                                  "generation_runtime": time_share + score_time,
-                                  "generation_engine": generator.description}
-                    saved.write(json.dumps(prediction, ensure_ascii=False) + "\n")
-                    saved.flush()
-                    readable.write(readable_prediction(position, prediction))
-                    readable.flush()
-                    predictions.append(prediction)
+                                  "generation_runtime": time_share}
+                    store.save_answer(prediction)
+                    save_first_stage(store, prediction)
                     progress.update(1)
     finally:
         if generator is not None:
             generator.close()
-    results = [(row["correct"], row["format_valid"], row["truncated"]) for row in predictions]
-    elapsed = sum(row["generation_runtime"] for row in predictions)
-    metrics = answer_metrics(results)
-    metrics.update(generation_runtime=elapsed, generation_samples_per_second=len(results) / max(elapsed, 1e-9))
-    metrics["generation_initialization_runtime"] = generator.initialization_runtime if generator else 0.0
-    report = {
-        "source_type": source_type, "stage": stage, "model_name": model_name,
-        "checkpoint": str(checkpoint) if checkpoint is not None else None,
-        "sft_source": str(sft_source) if sft_source is not None else None,
-        "prepared_sft_data": str(prepared_sft_data) if prepared_sft_data else None,
-        "data": {"source": plan["source"], "split": "validation", "indices": indices,
-                 "fingerprint": plan["fingerprint"], "split_seed": plan["split_seed"]},
-        "text_format": text_format(tokenizer), "precision": "bf16" if config.get("bf16") else "fp32",
-        "generation": {"do_sample": False, "max_new_tokens": config["max_new_tokens"],
-                       "eos_token_id": tokenizer.eos_token_id, "batch_size": batch_size,
-                       "auto_batch_size": auto_batch_size, "requested_backend": generation_settings["backend"],
-                       "engine": generator.description if generator else None},
-        "scoring": SCORING,
-        "metrics": metrics, "predictions": predictions,
-    }
-    try:
-        if config["data"]["name"] == OPENR1["name"]:
-            apply_rule_scoring(report, output, disable_tqdm=disable_tqdm)
-    finally:
-        output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(format_metrics(metrics, "Generation evaluation"), flush=True)
-    print(f"Saved evaluation report to {output}", flush=True)
+    if config["data"]["name"] == OPENR1["name"]:
+        apply_rule_scoring(store, disable_tqdm=disable_tqdm)
+    report = saved_evaluation(store)
+    print(format_metrics(report["metrics"], "Generation evaluation"), flush=True)
+    print(f"Saved evaluation records to {store.directory}", flush=True)
     return report
 
 
@@ -247,7 +259,7 @@ def main():
                              f"Transformers {DEFAULT_BATCH_SIZES['transformers']}); starting size in adaptive mode.")
     parser.add_argument("--auto-batch-size", action="store_true",
                         help="Transformers only: double successful batches until the first failure, then retry smaller batches.")
-    parser.add_argument("--output", type=Path, help="JSON report path; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
+    parser.add_argument("--output", type=Path, help="Evaluation directory; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
     add_generation_arguments(parser)
     add_prepared_data_argument(parser)

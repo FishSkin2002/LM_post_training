@@ -152,7 +152,7 @@ class PostSFTTests(unittest.TestCase):
         sft = self.fixture.run_training("sft") / "final"
         sft_metadata = json.loads((sft / "run.json").read_text())
         original_weights = load_file(sft / "adapter_model.safetensors")
-        sft_report = json.loads(next((sft.parent / "evaluations").glob("*.json")).read_text())
+        sft_report = fixtures.stored_evaluation(next((sft.parent / "evaluations").glob("*/metadata.json")).parent)
         held_out = [row["question"] for row in sft_report["predictions"]]
         changed_whitespace = " \n ".join(held_out[0].split())
 
@@ -271,7 +271,7 @@ class PostSFTTests(unittest.TestCase):
         self.assertEqual(metadata["stage"], stage)
         self.assertEqual(metadata["evaluation"]["data"], sft_metadata["data"])
         self.assertEqual(metadata["data"]["filter_counts"], {"held_out_overlap": 1})
-        report = json.loads(next((resumed.parent / "evaluations").glob("*.json")).read_text())
+        report = fixtures.stored_evaluation(next((resumed.parent / "evaluations").glob("*/metadata.json")).parent)
         self.assertEqual(report["stage"], stage)
         self.assertEqual(report["data"], sft_report["data"])
         self.assertEqual(report["generation"], sft_report["generation"])
