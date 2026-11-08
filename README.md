@@ -12,7 +12,7 @@
 .
 ├── train.py                     # 训练入口，选择 SFT、DPO 或 GRPO
 ├── evaluate_checkpoint.py       # 生成验证集回答，完成一二级判分
-├── rescore_evaluation.py        # 调用在线大模型，为已保存的回答判分
+├── summarize_evaluation.py     # 可选 API 三级判定、正确率汇总与阅读报告
 ├── configs/                     # 训练、开发、大模型判分和公共生成配置
 ├── outputs/                     # 运行生成的训练与评测产物
 ├── utils/                       # 训练、数据准备、生成与评分的实现
@@ -69,7 +69,13 @@ configs/                         # 训练、开发、大模型判分和公共生
         │   └── <评测名>/
         │       ├── metadata.json         # 来源、共享快照引用、配置与环境
         │       ├── answers.jsonl         # 模型回答与每题生成数据
-        │       └── judgments.jsonl       # 一级、二级判决与原因，用于续跑
+        │       ├── judgments.jsonl       # 各级判决与 API 调用记录，用于续跑
+        │       ├── scorings/             # 各次独立评分
+        │       │   └── scoring/          # 重名时加 -1、-2 等后缀
+        │       │       └── metadata.json # 回答来源与本次裁判设置
+        │       ├── answers-0001.md       # 分卷问答及三阶段结果，汇总后生成
+        │       ├── api-decided.md        # API 判对/判错、原因与原题链接
+        │       └── api-pending.md        # API 待复核原因与原题链接
         ├── prepared-sft/                # 读取旧 SFT 产物时自动准备的数据缓存
         │   ├── manifest.json            # 数据来源、准备配置与校验信息
         │   └── dataset/                 # 已准备的数据集
@@ -79,7 +85,7 @@ configs/                         # 训练、开发、大模型判分和公共生
         └── .sft-data-migration.lock      # 准备旧 SFT 数据时使用的并发锁
 ```
 
-`<step>` 是断点步数，默认最多保留最近两个断点。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数；`-rescored` 文件在运行大模型判分后生成，`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
+`<step>` 是断点步数，默认最多保留最近两个断点。分词器文件随保存版本有所不同。`<评测名>` 默认是 `final-OpenR1-Math-220k-default-train-n<N>`，`<N>` 是评测题数。`scorings/` 与 Markdown 在运行汇总入口后生成；问答默认每卷最多 100 题，总指标只在第一卷。`prepared-sft/` 和锁文件仅在需要准备旧 SFT 数据时生成。
 
 原始模型的评测默认保存在仓库的 `outputs/evaluations/`；题目与参考解答统一保存在仓库的 `outputs/evaluation-datasets/<快照标识>.json`，相同评测样本供各模型共用。开发输出由开发配置指定。新训练和加训遇到重名运行目录时自动加 `-1`、`-2` 等后缀，断点续训沿用原目录。
 
@@ -279,41 +285,53 @@ python evaluate_checkpoint.py --checkpoint /path/to/run/final
 | `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
 | `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
 
-### rescore_evaluation.py
+### summarize_evaluation.py
 
-读取历史完整评测 JSON，通过 API 调用在线大模型对其中的 OpenR1 回答进行判分。
+汇总已保存回答的正确性，默认通过 API 补做尚未处理的三级判定，正常结束后生成阅读报告。
 
-#### 准备 API 密钥
+默认使用 DeepSeek Flash，关闭思考模式，仅核对最终答案；完整提示词见 [JUDGE_PROMPT](utils/answer_judge.py)。需要 API 时，先读取 `DEEPSEEK_API_KEY`；缺少密钥则在终端隐藏输入，仅供本次运行使用。取消输入或中断时保留机器进度，不刷新阅读报告。
 
-在运行判分命令的终端中输入模型服务所需的密钥：
-
-```bash
-read -rsp 'DeepSeek API Key: ' DEEPSEEK_API_KEY
-export DEEPSEEK_API_KEY
-```
-
-#### 使用大模型判分
+#### 新建评分并汇总
 
 ```bash
-python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json
+python summarize_evaluation.py --evaluation /path/to/evaluation
 ```
 
-将 `--input` 替换为历史已完成一二级评测的完整 JSON 报告，将 `--output` 替换为新的报告路径。
-
-默认使用 DeepSeek Flash，关闭思考模式，仅核对最终答案；完整提示词见 [JUDGE_PROMPT](utils/answer_judge.py)。更换裁判模型或提示词后，使用新的 `--output` 路径开始判分。
+将路径替换为含 `metadata.json`、`answers.jsonl`、`judgments.jsonl` 的一二级评测目录。每次新建独立评分，终端打印实际评分目录；更换裁判设置时也新建评分。题目、回答和前级判决共用，已有历史报告保持原样。
 
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |
-| `--config` | `configs/evaluation/deepseek.yaml` | 选择模型服务地址、模型与请求设置。 |
-| `--retry-pending` | 复用已保存的待复核判决 | 重新尝试待复核题。 |
+| `--config` | `configs/evaluation/deepseek.yaml` | 第一次实际启用 API 时选择服务、模型与请求设置。 |
+| `--no-api` | 补做剩余三级判定 | 只汇总现有一二级结果，不读取裁判配置或索取密钥。 |
+| `--questions-per-file` | `100` | 每份问答 Markdown 的题数上限，须为正整数。 |
 
-#### 继续判分或重试待复核题
+#### 继续评分或重试待复核题
 
 ```bash
-python rescore_evaluation.py --input /path/to/evaluation.json --output /path/to/evaluation-rescored.json --retry-pending
+python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring
 ```
 
-沿用原来的输入和输出路径；不加 `--retry-pending` 时仅继续未处理题，加上后也重试待复核题。缺少密钥时，需要大模型判分的题会记为待复核。
+将路径替换为之前打印的评分目录；与 `--evaluation` 互斥。继续沿用已保存裁判设置和提示，只处理未完成的题。已保存的待复核也算已处理，正常续跑不自动重试。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--retry-pending` | 复用待复核判决 | 同时重新请求本次评分中的待复核题，追加新判决。 |
+| `--config` | 沿用原裁判设置 | 原评分尚未启用 API 时，指定首次使用的裁判配置。 |
+| `--questions-per-file` | `100` | 调整问答分卷上限，重新生成阅读版。 |
+
+#### 只查看已有结果
+
+```bash
+python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring --no-api
+```
+
+此模式不请求 API、不重试待复核或索取密钥，可查看中断后的部分结果；未处理、待复核、明确错误分开统计，总题数保持不变。
+
+| 可选参数 | 默认行为 | 用途 |
+| --- | --- | --- |
+| `--questions-per-file` | `100` | 调整每份问答 Markdown 的题数上限。 |
+
+阅读文件位于原评测目录，反映本次选定的评分；再次成功汇总会替换同名阅读版。完整问答只保存在 `answers-0001.md` 等分卷中，判定原因放在两类 API 清单，通过链接定位原题；API 原始响应与用量保存在判决 JSONL 中。
 
 | 可选参数 | 默认行为 | 用途 |
 | --- | --- | --- |

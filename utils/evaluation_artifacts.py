@@ -69,8 +69,9 @@ class EvaluationStore:
         elif self.answers_path.exists() or self.judgments_path.exists():
             raise ValueError("Evaluation records exist without metadata; choose a new output directory.")
         self.answers = read_jsonl(self.answers_path)
+        self.judgment_records = read_jsonl(self.judgments_path)
         self.judgments = {}
-        for record in read_jsonl(self.judgments_path):
+        for record in self.judgment_records:
             self.judgments.setdefault(record["index"], {})[record["stage"]] = record
 
     def create(self, rows, metadata):
@@ -98,7 +99,12 @@ class EvaluationStore:
     def save_judgment(self, index, stage, result):
         record = {"index": index, "stage": stage, **result}
         append_jsonl(self.judgments_path, record)
+        self.judgment_records.append(record)
         self.judgments.setdefault(index, {})[stage] = record
+
+    def api_results(self, scoring_run):
+        return {record["index"]: record for record in self.judgment_records
+                if record["stage"] == 3 and record.get("scoring_run") == scoring_run}
 
     def predictions(self):
         """Join saved facts in memory; this view is never persisted as another report."""

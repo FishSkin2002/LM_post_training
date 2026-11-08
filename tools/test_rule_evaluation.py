@@ -1,18 +1,17 @@
 """Local two-stage evaluation through the real checkpoint evaluator, with no API."""
 
 from contextlib import redirect_stdout
-from copy import deepcopy
 import io
 import json
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import test_instruct_sft as fixtures
 import evaluate_checkpoint as evaluation
-import rescore_evaluation as rescoring
+import summarize_evaluation as summarizing
 from utils import answer_judge, math_data, rule_scoring
 
 
@@ -186,16 +185,21 @@ class RuleEvaluationTests(unittest.TestCase):
         self.assertTrue(report["rule_scoring"]["complete"])
         self.assertEqual(store.answers_path.read_bytes(), saved_answers)
 
-    def test_existing_rescoring_uses_saved_local_decisions_without_repeating_rules(self):
+    def test_summary_uses_saved_local_decisions_without_repeating_rules(self):
         with patch.object(evaluation, "generate_answers", return_value=self.answers):
             report = self.evaluate()
-        before = deepcopy(report)
-        judge = Mock(return_value={"status": "passed", "reason": "API confirmed", "attempts": []})
-        with patch.object(rescoring, "grade_rules", side_effect=AssertionError("Use the saved rules")):
-            results = [rescoring.grade_prediction(row, judge) for row in report["predictions"]]
-        self.assertEqual(judge.call_count, 1)
-        self.assertEqual([result["decision_stage"] for result in results], [1, 2, 1, 3])
-        self.assertEqual(report, before, "API results must not mutate saved local decisions")
+        store = self.store()
+        before = {path: path.read_bytes() for path in (store.metadata_path, store.answers_path, store.judgments_path)}
+        with patch.object(summarizing, "ROOT", self.fixture.root), \
+                patch.object(summarizing, "APIJudge", side_effect=AssertionError("No API in local-only summary")), \
+                patch.object(rule_scoring, "grade_rules", side_effect=AssertionError("Use the saved rules")), \
+                redirect_stdout(io.StringIO()):
+            summary = summarizing.summarize_evaluation(self.output, no_api=True)
+        self.assertEqual(summary["metrics"]["confirmed_correct"], 2)
+        self.assertEqual(summary["metrics"]["incorrect"], 1)
+        self.assertEqual(summary["metrics"]["unprocessed_samples"], 1)
+        for path, content in before.items():
+            self.assertEqual(path.read_bytes(), content)
 
     def test_default_full_evaluation_resumes_without_the_original_dataset(self):
         options = dict(model_name=self.fixture.model_name, tokenizer=self.fixture.tokenizer,
