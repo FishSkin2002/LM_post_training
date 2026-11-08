@@ -8,6 +8,7 @@
 - 提交关系确认 PR62 的 21823ad 已进入远程 main/13f203a；本轮一次 open 列表仅见其他任务 PR33，未读取任何 PR 内容或评审。
 - 新增 `docs/evaluation-artifacts.md` 作为产物要求入口；同步分级判定、项目入口、训练、DPO/GRPO、vLLM、旧数据准备六份约定，术语表增加评测样本快照与评测汇总的领域定义。README 留待功能实现时同步真实行为。
 - `git diff --check`、8 份正式 Markdown 的 57 个本地文件/锚点检查通过；只读复核确认所有已定设计已覆盖，正式约定无旧独立三级入口或逐题 Markdown 追加要求残留。差异仅包含 Markdown；未运行模型、训练或付费 API，用户研究文件未修改。
+- 要求提交 d61704f 已通过受控入口正常推送，创建 [PR63](https://github.com/FishSkin2002/LM_post_training/pull/63)；本轮只交付要求。待用户审查合入并说“继续”后，再从最新 main 分步骤实现，不提前修改运行脚本或已有产物。
 
 ## 2026-11-07：DeepSeek 最终答案裁判
 
