@@ -143,12 +143,14 @@ def interpret_response(response):
 
 
 class APIJudge:
-    def __init__(self, config):
+    def __init__(self, config, *, api_key=None, prompt=JUDGE_PROMPT):
         self.config = validate_config(config)
+        self.api_key = api_key
+        self.prompt = prompt
 
     def __call__(self, row):
         config = self.config
-        key = os.environ.get(config["api_key_env"], "").strip()
+        key = (self.api_key if self.api_key is not None else os.environ.get(config["api_key_env"], "")).strip()
         if not key.strip():
             return {"status": "pending", "verdict": None, "reason": "missing_api_key",
                     "attempts": []}
@@ -159,7 +161,7 @@ class APIJudge:
             **config["request_parameters"], "model": config["model"], "stream": False,
             "max_tokens": config["max_tokens"],
             "messages": [
-                {"role": "system", "content": JUDGE_PROMPT},
+                {"role": "system", "content": self.prompt},
                 {"role": "user", "content": json.dumps({
                     "problem": row["question"],
                     "dataset_reference_answer": row["reference_final_answer"],
