@@ -223,7 +223,7 @@ class RuleEvaluationTests(unittest.TestCase):
                 patch.object(evaluation, "apply_rule_scoring", side_effect=AssertionError("No R1 grading for GSM8K")):
             report = self.evaluate()
         self.assertNotIn("rule_scoring", report)
-        self.assertFalse(self.output.with_suffix(".stage2.progress.jsonl").exists())
+        self.assertTrue(all(set(levels) == {1} for levels in self.store().judgments.values()))
 
 
 if __name__ == "__main__":

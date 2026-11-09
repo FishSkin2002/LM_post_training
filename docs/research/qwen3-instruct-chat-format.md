@@ -1,6 +1,6 @@
 # Qwen3-4B-Instruct-2507 的数学聊天样本格式
 
-2026-10-29：用户接受以 Instruct 为起点和原生聊天模板，并确定固定解题要求放入 system，user 原样保存 problem，assistant 保存筛选后的完整 R1 解答；省去字面上的 Question/Answer 前缀。此文记录依据和实际渲染，正式目标行为以[模型与样本约定](../qwen3-base.md)为准；生产代码尚未迁移。
+本项目使用 Instruct 和原生聊天模板：固定解题要求放入 system，user 原样保存 problem，assistant 保存筛选后的完整 R1 解答。此文保留选型依据和实际渲染示例；当前规则以[模型与样本约定](../qwen3-base.md)为准。
 
 ## system 放置的项目证据
 
@@ -16,7 +16,7 @@
 - 模板支持显式 system 消息；本项目提供一条固定 system 指令。未提供 system 且没有 tools 时，模板也不会隐式补入 system。
 - assistant 字符串正文原样插入，R1 的 `<think>...</think>` 因此得以保留；模板本身不自动插入或删除思考段。
 - 生成前缀由 `add_generation_prompt=True` 添加 `<|im_start|>assistant\n`，没有预填的 `<think>`。
-- 原生 EOS 为 `<|im_end|>`，原生 PAD 为 `<|endoftext|>`。不能继续采用当前 Base 流程的结束假设，也不在模板结束后再补一个旧 EOS。
+- 原生 EOS 为 `<|im_end|>`，原生 PAD 为 `<|endoftext|>`；模板结束后不再补 EOS。
 - 模板已存在，使用 `tokenizer.apply_chat_template` 构造输入，不另写自定义模板或改动词表。
 
 ## 具体样本

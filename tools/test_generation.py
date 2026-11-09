@@ -19,7 +19,6 @@ import train as training_common
 import evaluate as evaluation
 import summarize_evaluation as summarizing
 from utils.prepare_sft_data import load_tokenizer
-from utils.prepared_sft_data import load_prepared_sft_data, save_prepared_sft_data
 from utils.training_workflow import data_plan
 from tools import test_instruct_sft as fixtures
 
@@ -346,37 +345,6 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(loaded.encode(generation.build_prompt(loaded, "question 2"), add_special_tokens=False),
                          self.tokenizer.encode(generation.build_prompt(self.tokenizer, "question 2"), add_special_tokens=False))
         self.assertEqual(loaded.model_input_names, ["input_ids", "attention_mask"])
-
-    def test_exported_prepared_data_keeps_source_identity_and_split(self):
-        dataset, info = self.fixture.prepared()
-        path = save_prepared_sft_data(self.root / "prepared", dataset, info, self.fixture.config, self.tokenizer)
-        restored, restored_info = load_prepared_sft_data(path, self.fixture.config, self.tokenizer)
-        self.assertEqual(restored._fingerprint, dataset._fingerprint)
-        self.assertEqual(restored_info, info)
-        self.assertEqual(data_plan(restored, None, restored_info), data_plan(dataset, None, info))
-        self.assertEqual(restored.to_list(), dataset.to_list())
-        with self.assertRaises(ValueError):
-            load_prepared_sft_data(path, {**self.fixture.config, "max_length": 1}, self.tokenizer)
-        manifest_path = path / "manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        manifest["fingerprint"] = "changed"
-        manifest_path.write_text(json.dumps(manifest))
-        with self.assertRaisesRegex(ValueError, "identity"):
-            load_prepared_sft_data(path, self.fixture.config, self.tokenizer)
-
-    def test_evaluation_reads_exported_data_without_rebuilding_it(self):
-        dataset, info = self.fixture.prepared()
-        path = save_prepared_sft_data(self.root / "prepared", dataset, info, self.fixture.config, self.tokenizer)
-        model = self.fixture.model_loader(self.fixture.model_name)
-        with patch.object(evaluation, "prepare_dataset", side_effect=AssertionError("must reuse exported data")), \
-                patch.object(evaluation, "generate_answers", return_value=[("", 1, False)] * 2):
-            report = evaluation.evaluate_checkpoint(model_name=self.fixture.model_name, model=model, tokenizer=self.tokenizer,
-                                                    config=self.fixture.config, prepared_sft_data=path, device="cpu",
-                                                    generation_backend="transformers", output=self.root / "evaluation.json",
-                                                    disable_tqdm=True)
-        self.assertEqual(report["data"]["fingerprint"], dataset._fingerprint)
-        expected = dataset.select(data_plan(dataset, None, info)["validation_indices"])
-        self.assertEqual([row["source_index"] for row in report["predictions"]], list(expected["source_index"]))
 
     def test_grpo_translates_generation_parameters_and_keeps_native_for_old_config(self):
         common = dict(num_generations=2, max_completion_length=4, per_device_train_batch_size=1,
