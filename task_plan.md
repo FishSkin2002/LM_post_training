@@ -6,11 +6,13 @@
 | --- | --- | --- |
 | 恢复与核对 | complete | 已读取 README 编写/Git 约定、实际 CLI 与配置；受控入口从最新 main 创建独立文档分支。 |
 | 使用文档整理 | complete | README 已保留 13 个用途的简介与必要命令；独立参考含全部必需及适用可选参数、默认值与约束，包括 additional-epochs。 |
-| 验证与交付 | in_progress | 13 个示例/参数表、5 个本地链接、默认值、5 组 help 及差异检查已通过，准备正常提交并独立发起文档 PR。 |
+| 验证与交付 | complete | 13 个示例/参数表、5 个本地链接、默认值、5 组 help 及差异检查通过；ac474f9 已正常推送并创建独立文档 PR67。 |
 
 当前分支 codex/readme-script-parameter-reference。此前脚本接口讨论的未提交规划原文保存在本机 /tmp/qwen-interface-discussion-u0vrbgxk/，不是已定正式要求；本轮不混入该讨论或修改其接口。用户未跟踪研究文件保留并排除提交。README 规则同步属于独立项目要求类别，本轮先完成用户明确要求的 README 与参数参考。
 
 新增 docs/script-arguments.md；README 使用说明从 218 行缩为 121 行，其余章节与提交基线逐字一致。一次 open 查询仅见其他任务 PR33，不读取 PR 内容或评审。本轮不修改业务代码，不运行模型训练或 API 请求；现有 README 编写约定的分层规则同步留后续独立要求步骤。
+
+本轮已交付 [PR67](https://github.com/FishSkin2002/LM_post_training/pull/67)，等待用户审查合入。当前只完成使用文档；脚本简化讨论保持未决，不自动实施更名、参数删除或数据缓存改造。
 
 ## 已完成：接通训练结束自动评测与汇总
 
