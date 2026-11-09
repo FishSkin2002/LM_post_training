@@ -1,6 +1,6 @@
 # 分级评测与大模型判分约定
 
-用户于 2026-11-09 确认入口边界：`evaluate_checkpoint.py` 只做生成及一二级判定；`summarize_evaluation.py` 默认补做三级大模型判分并汇总，`--no-api` 只汇总已保存判决。大模型判分通过 API 调用在线大模型。入口与训练编排见[项目整理约定](project-layout.md)；共享快照、JSONL 与全部 Markdown 的生成时机以[评测产物约定](evaluation-artifacts.md)为准。本文集中规定三级判分协议和计分口径。
+用户于 2026-11-09 确认入口边界：`evaluate.py` 只做生成及一二级判定；`summarize_evaluation.py` 默认补做三级大模型判分并汇总，`--no-api` 只汇总已保存判决。大模型判分通过 API 调用在线大模型。入口与训练编排见[项目整理约定](project-layout.md)；共享快照、JSONL 与全部 Markdown 的生成时机以[评测产物约定](evaluation-artifacts.md)为准。本文集中规定三级判分协议和计分口径。
 
 ## 输入与范围
 

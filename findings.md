@@ -1,5 +1,15 @@
 # 当前实现发现
 
+## 脚本精简最终范围（2026-11-09）
+
+- 用户最终确认：公开续跑统一 resume；训练 continue-from/sft-source 统一 source，保留 additional-epochs；train 的 env 默认新环境、显式旧环境才进入旧环境准备；评测改为 evaluate.py，checkpoint 同时接收固定官方模型标识或本项目训练产物目录，删除 model-name。
+- 评测 source 仅用于原始 Qwen 对齐某次训练的评测设置；训练产物自动读取自身记录，不能额外 source 覆盖。删除公开 prepared-sft-data 后，内部保存路径、现有缓存读取及配置/划分校验继续保留。
+- 第五项已被用户明确收窄：不在本轮新增缓存缺失重建、失效绝对路径回退、公共评测快照恢复或解除跨机器原 SFT 路径依赖。继续使用已有公共缓存，不设计新的存储区或额外完整数据导出。
+- 当前正式约定仍使用旧入口/参数，automatic-sft-migration 与 vllm-generation 还要求训练自动创建兼容环境；需随 train env 的显式选择规则同步，评测既有兼容准备保持原边界。
+- 一次规划补丁误用了尚未合入 PR68 的计划标题，在 main/1271647 基线未能匹配，工具未写入任何修改；已重新读取当前三份规划后调整上下文。
+- 既有正式约定的旧评测文件名已统一目标名称，原始模型与训练产物的两类选择合入 checkpoint；旧 CLI 名只在接口迁移对照表中保留。使用文档仍保留实际旧 CLI，避免把待实现目标写成现状。
+- 验证覆盖 8 份要求文档的 67 个本地链接/锚点及无运行文件改动。训练 env 的语义与评测原有兼容准备明确分开；只删除公开 prepared 参数，不新增跨机器或缓存缺失恢复。
+
 ## README 参数核对（2026-11-09）
 
 - 当前公开名称仍为 evaluate_checkpoint.py、resume-from-checkpoint、continue-from、sft-source、prepared-sft-data 和汇总的 resume-from；文档必须使用实际名称。additional-epochs 仅用于 SFT 加训，与 continue-from 成对要求正数。

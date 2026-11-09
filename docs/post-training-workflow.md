@@ -1,5 +1,7 @@
 # DPO 与 GRPO 训练约定
 
+公开来源/续跑参数与数据准备环境开关以[脚本接口精简约定](script-interface.md)为准；DPO、GRPO 仍分别从 SFT 开始，本轮不增加任意阶段往返训练。
+
 ## 实验起点
 
 - DPO 使用 `python train.py dpo ...`，GRPO 使用 `python train.py grpo ...`；二者是独立训练方法，各自从 SFT 开始，互不依赖对方运行或产物。业务实现归入 `utils/`，按[项目整理约定](project-layout.md)分别组织两种方法的训练实现。
