@@ -19,10 +19,14 @@ from train import AdapterTrainerMixin, evaluate_after_training, load_training_mo
 from utils.training_workflow import data_plan, read_source, reserve_directory, save_run
 from utils.generation import load_generation_config, package_version
 from utils.data_preparation import prepare_sft, prepare_stage
+from utils.vllm_logging import configure_vllm_logging
 
 
 class MathGRPOTrainer(AdapterTrainerMixin, GRPOTrainer):
-    pass
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.args.use_vllm:
+            configure_vllm_logging()
 
 
 def load_config(path):

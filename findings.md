@@ -1,5 +1,12 @@
 # 当前维护发现
 
+## 评测 EOS 告警（2026-11-09）
+
+- 固定版本 vLLM 0.10.2 的 vllm.inputs.preprocess.get_eos_token_id 在内部 tokenizer 为空时逐次输出 `Using None for EOS token id because tokenizer is not initialized`；请求处理器逐题调用它，导致每次提交一批题目时刷屏。
+- 公共 VLLMGenerator 使用项目分词器先构造 prompt_token_ids，显式传入 ignore_eos=True、stop_token_ids=[tokenizer.eos_token_id]，并通过项目分词器解码；跳过的只有 vLLM 内部分词器初始化，不包括模型和推理引擎。
+- 来源：[vLLM 预处理器](https://github.com/vllm-project/vllm/blob/v0.10.2/vllm/inputs/preprocess.py#L55-L63)、[逐请求调用](https://github.com/vllm-project/vllm/blob/v0.10.2/vllm/v1/engine/processor.py#L346)。最终方案只匹配该 logger、WARNING 级别和完整文本，由独立模块供公共评测和 GRPO 训练复用，不提高模块级别或修改第三方源码。
+- Python 官方 logging.addFilter 接受可调用函数，重复添加同一函数不会叠加过滤器；在 vLLM 日志初始化后注册。模块只依赖标准库，导入时不加载 vLLM 或 CUDA，不依赖 Conda 或额外配置文件。
+
 ## 精简盘点（2026-11-09）
 
 - 当前维护入口为 train.py、evaluate.py、summarize_evaluation.py；SFT、DPO、GRPO、默认 current 与显式 legacy 均仍在维护。不能把旧环境兼容当作废弃功能。

@@ -17,6 +17,7 @@ import yaml
 from utils.prepare_sft_data import build_prompt, model_dtype
 from utils.arguments import add_generation_arguments
 from utils.paths import GENERATION_CONFIG
+from utils.vllm_logging import configure_vllm_logging
 
 
 def load_generation_config(path=None, backend=None):
@@ -133,6 +134,7 @@ class VLLMGenerator:
             from vllm.lora.request import LoRARequest
         except ImportError as error:
             raise ImportError("vLLM is unavailable. Use the documented vLLM environment or explicitly select transformers.") from error
+        configure_vllm_logging()
         from huggingface_hub import snapshot_download
 
         base = Path(model_name)
