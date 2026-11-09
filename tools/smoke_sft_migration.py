@@ -46,7 +46,7 @@ def make_fixture(root):
 
 def smoke(root, conda_exe):
     import torch
-    import evaluate_checkpoint as evaluation
+    import evaluate as evaluation
     import utils.generation as generation
     from legacy.sft_data import migration
     from utils.prepare_sft_data import load_tokenizer
@@ -65,7 +65,7 @@ def smoke(root, conda_exe):
     if resolve_prepared_sft_data(source):
         raise ValueError("Acceptance requires an absent prepared data cache.")
     output = root / "evaluation.json"
-    argv = ["evaluate_checkpoint.py", "--checkpoint", str(source), "--device", "cpu",
+    argv = ["evaluate.py", "--checkpoint", str(source), "--device", "cpu",
             "--generation-backend", "transformers", "--num-samples", "1", "--output", str(output)]
     original_loader = generation.AutoModelForCausalLM.from_pretrained
     def load_tiny(model_name, **kwargs):

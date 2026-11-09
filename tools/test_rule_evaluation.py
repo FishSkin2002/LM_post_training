@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import test_instruct_sft as fixtures
-import evaluate_checkpoint as evaluation
+import evaluate as evaluation
 import summarize_evaluation as summarizing
 from utils import answer_judge, math_data, rule_scoring
 

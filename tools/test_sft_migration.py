@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from peft import LoraConfig, get_peft_model
 
-import evaluate_checkpoint as evaluation
+import evaluate as evaluation
 from legacy.sft_data import migration
 import utils.training.sft as train_sft
 import train as training_cli
@@ -109,7 +109,7 @@ class MigrationTests(unittest.TestCase):
             ensure_prepared_sft_data(self.source, self.metadata)
         self.assertEqual((self.source / "run.json").read_bytes(), original)
 
-    def test_post_sft_training_automatically_prepares_on_first_use(self):
+    def test_post_sft_current_preparation_never_creates_legacy_environment(self):
         class PreparedHeldOut(Exception):
             pass
         expected = self.dataset.select(self.metadata["data"]["validation_indices"])["question"]
@@ -118,32 +118,32 @@ class MigrationTests(unittest.TestCase):
             source = self.root / stage / "source" / "final"
             shutil.copytree(self.source, source)
             with self.subTest(stage=stage), \
-                    patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
-                    patch.object(migration, "run_child", side_effect=self.export), \
+                    patch.object(migration, "ensure_compatibility_environment", side_effect=AssertionError("current must not create legacy")), \
                     patch.object(training, "load_config", return_value=({"trainer": {}, "data": {}, "output_dir": "unused"}, 2048)), \
                     patch.object(training, "training_arguments", return_value=SimpleNamespace(use_vllm=False)), \
-                    patch.object(training, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
+                    patch.object(training, "prepare_dataset", return_value=(self.dataset, self.info)), \
                     patch.object(training, "prepare_post_training_data", side_effect=PreparedHeldOut) as prepare:
                 with self.assertRaises(PreparedHeldOut):
                     training.train( "unused", sft_source=source)
                 self.assertEqual(prepare.call_args.args[3], expected)
-                self.assertTrue((source.parent / "prepared-sft" / "manifest.json").is_file())
+                self.assertFalse((source.parent / "prepared-sft").exists())
 
-    def test_sft_continue_automatically_prepares_before_loading_weights(self):
+    def test_sft_continue_uses_current_preparation_before_loading_weights(self):
         class PreparedData(Exception):
             pass
         config = self.root / "sft.json"
         config.write_text(json.dumps(self.fixture.config))
         output = self.root / "continued"
-        argv = ["train.py", "sft", "--config", str(config), "--continue-from", str(self.source),
+        argv = ["train.py", "sft", "--config", str(config), "--source", str(self.source),
                 "--additional-epochs", "1", "--output-dir", str(output)]
-        with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
-                patch.object(migration, "run_child", side_effect=self.export), \
-                patch.object(train_sft, "prepare_dataset", side_effect=AssertionError("must use automatic cache")), \
+        with patch.object(migration, "ensure_compatibility_environment", side_effect=AssertionError("current must not create legacy")), \
+                patch.object(train_sft, "prepare_dataset", return_value=(self.dataset, self.info)), \
                 patch.object(train_sft, "load_training_model", side_effect=PreparedData), patch.object(sys, "argv", argv):
             with self.assertRaises(PreparedData):
                 training_cli.main()
-        self.assertEqual(json.loads((output / "run.json").read_text())["prepared_sft_data"], str(self.target))
+        from utils.prepared_sft_data import data_environment
+        self.assertEqual(json.loads((output / "run.json").read_text())["data_environment"], data_environment())
+        self.assertFalse(self.target.exists())
 
     def test_checkpoint_evaluation_prepares_without_requiring_final(self):
         self.source = self.source.rename(self.source.with_name("checkpoint-7"))

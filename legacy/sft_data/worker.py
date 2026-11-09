@@ -1,4 +1,4 @@
-"""Private CPU data worker, launched only by the main-environment migration entry."""
+"""Private CPU worker for explicit legacy preparation and historical SFT migration."""
 
 import argparse
 from importlib.metadata import distributions, version
@@ -50,21 +50,49 @@ def export_data(source, output):
     return path
 
 
+def prepare_request(request_path, result_path):
+    check_environment()
+    from utils.data_preparation import cache_reference, recipe
+    from utils.prepare_sft_data import load_tokenizer, prepare_dataset
+    from utils.prepared_sft_data import data_environment
+    request = json.loads(Path(request_path).read_text())
+    stage, config = request["stage"], request["config"]
+    tokenizer = load_tokenizer(request["tokenizer"], local_files_only=True)
+    if stage == "sft":
+        dataset, info = prepare_dataset(config, tokenizer)
+    elif stage in ("dpo", "grpo"):
+        from utils.post_training_data import prepare_post_training_data
+        dataset, info = prepare_post_training_data(stage, config, tokenizer,
+                                                 request["held_out"], request["length_limit"])
+    else:
+        raise ValueError("Unknown data preparation stage.")
+    identity = recipe(stage, config, tokenizer, request["held_out"], request["length_limit"])
+    reference = cache_reference(dataset, identity)
+    if reference is None:
+        raise ValueError("Legacy preparation requires persistent Hugging Face Arrow cache files.")
+    Path(result_path).write_text(json.dumps({"cache": reference, "info": info,
+                                            "environment": data_environment()}, ensure_ascii=False))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check-environment", action="store_true")
     parser.add_argument("--sft-source", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--request", type=Path)
+    parser.add_argument("--result", type=Path)
     args = parser.parse_args()
     try:
         if args.check_environment:
             runtime = check_environment()
             print(f"CPU compatibility environment ready: {runtime['profile']}; "
                   f"torch={runtime['packages']['torch']}; cuda_runtime=None", flush=True)
+        elif args.request and args.result:
+            prepare_request(args.request, args.result)
         elif args.sft_source and args.output:
             print(f"Exported verified SFT data: {export_data(args.sft_source, args.output)}", flush=True)
         else:
-            parser.error("Provide --check-environment or both --sft-source and --output.")
+            parser.error("Provide --check-environment, --request/--result or --sft-source/--output.")
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 

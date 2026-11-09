@@ -11,7 +11,7 @@
 ```text
 .
 ├── train.py                     # 训练入口，选择 SFT、DPO 或 GRPO
-├── evaluate_checkpoint.py       # 生成验证集回答，完成一二级判分
+├── evaluate.py                  # 生成验证集回答，完成一二级判分
 ├── summarize_evaluation.py     # 可选 API 三级判定、正确率汇总与阅读报告
 ├── configs/                     # 训练、开发、大模型判分和公共生成配置
 ├── outputs/                     # 运行生成的训练与评测产物
@@ -142,7 +142,7 @@ python train.py sft
 从完整断点恢复原训练进度，沿用原运行目录。
 
 ```bash
-python train.py sft --resume-from-checkpoint /path/to/sft-run/checkpoint-5000
+python train.py sft --resume /path/to/sft-run/checkpoint-5000
 ```
 
 #### SFT：完成后加训
@@ -150,7 +150,7 @@ python train.py sft --resume-from-checkpoint /path/to/sft-run/checkpoint-5000
 从已有 SFT 权重开启新运行，示例追加训练 1 轮。
 
 ```bash
-python train.py sft --continue-from /path/to/sft-run/final --additional-epochs 1
+python train.py sft --source /path/to/sft-run/final --additional-epochs 1
 ```
 
 #### DPO：从 SFT 开始训练
@@ -158,7 +158,7 @@ python train.py sft --continue-from /path/to/sft-run/final --additional-epochs 1
 使用已完成的 SFT `final/` 开始独立的 DPO 训练。
 
 ```bash
-python train.py dpo --sft-source /path/to/sft-run/final
+python train.py dpo --source /path/to/sft-run/final
 ```
 
 #### DPO：恢复未完成的训练
@@ -166,7 +166,7 @@ python train.py dpo --sft-source /path/to/sft-run/final
 恢复 DPO 完整断点；来源 SFT 产物需保留在原路径。
 
 ```bash
-python train.py dpo --resume-from-checkpoint /path/to/dpo-run/checkpoint-100
+python train.py dpo --resume /path/to/dpo-run/checkpoint-100
 ```
 
 #### GRPO：从 SFT 开始训练
@@ -174,7 +174,7 @@ python train.py dpo --resume-from-checkpoint /path/to/dpo-run/checkpoint-100
 使用已完成的 SFT `final/` 开始独立的 GRPO 训练。
 
 ```bash
-python train.py grpo --sft-source /path/to/sft-run/final
+python train.py grpo --source /path/to/sft-run/final
 ```
 
 #### GRPO：恢复未完成的训练
@@ -182,10 +182,10 @@ python train.py grpo --sft-source /path/to/sft-run/final
 恢复 GRPO 完整断点；来源 SFT 产物需保留在原路径。
 
 ```bash
-python train.py grpo --resume-from-checkpoint /path/to/grpo-run/checkpoint-100
+python train.py grpo --resume /path/to/grpo-run/checkpoint-100
 ```
 
-### evaluate_checkpoint.py
+### evaluate.py
 
 生成验证集回答并完成一二级判分；中断后重跑相同命令会继续已有进度。
 
@@ -194,7 +194,7 @@ python train.py grpo --resume-from-checkpoint /path/to/grpo-run/checkpoint-100
 使用默认评测配置，评测原始 Instruct 模型。
 
 ```bash
-python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
+python evaluate.py --checkpoint Qwen/Qwen3-4B-Instruct-2507
 ```
 
 #### 评测训练产物
@@ -202,7 +202,7 @@ python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 评测 SFT、DPO 或 GRPO 的 `final/` 或 `checkpoint-<step>/`，自动读取保存的评测配置与划分。
 
 ```bash
-python evaluate_checkpoint.py --checkpoint /path/to/run/final
+python evaluate.py --checkpoint /path/to/run/final
 ```
 
 ### summarize_evaluation.py
@@ -222,7 +222,7 @@ python summarize_evaluation.py --evaluation /path/to/evaluation
 使用已有评分目录，沿用原裁判设置和已保存判决，继续处理未完成的题。
 
 ```bash
-python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring
+python summarize_evaluation.py --resume /path/to/evaluation/scorings/scoring
 ```
 
 #### 重试待复核题
@@ -230,7 +230,7 @@ python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scorin
 继续已有评分，同时对待复核题重新请求 API。
 
 ```bash
-python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring --retry-pending
+python summarize_evaluation.py --resume /path/to/evaluation/scorings/scoring --retry-pending
 ```
 
 #### 只查看已有结果
@@ -238,5 +238,5 @@ python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scorin
 汇总所选评分已有的完整或部分结果，不请求 API。
 
 ```bash
-python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring --no-api
+python summarize_evaluation.py --resume /path/to/evaluation/scorings/scoring --no-api
 ```

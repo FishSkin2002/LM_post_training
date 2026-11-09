@@ -107,7 +107,7 @@ def read_source(path, config=None, *, resume=False):
         if step >= state["max_steps"]:
             message = "This training plan is complete."
             if stage == "sft":
-                message += " Use --continue-from for additional training."
+                message += " Use --source for additional training."
             raise ValueError(message)
     return path, metadata, step
 

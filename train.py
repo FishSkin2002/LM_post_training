@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from utils.arguments import add_generation_arguments, add_prepared_data_argument
+from utils.arguments import add_generation_arguments
 from utils.paths import CONFIG_DIR, GENERATION_CONFIG, ROOT
 
 FINAL_EVALUATION_FLAG = "--evaluate-saved-training"
@@ -21,36 +21,36 @@ def main(argv=None):
         command = stages.add_parser(stage, help=f"Train or resume the {stage.upper()} stage.")
         command.add_argument("--config", type=Path, default=CONFIG_DIR / f"training/{stage}.yaml")
         command.add_argument("--output-dir", type=Path, help="New run directory; collisions add -1, -2, ... .")
+        command.add_argument("--env", choices=("current", "legacy"), default="current",
+                             help="Data preparation environment (default: current); model training stays in this Python.")
         source = command.add_mutually_exclusive_group(required=stage != "sft")
-        source.add_argument("--resume-from-checkpoint", type=Path, help="Restore an unfinished training checkpoint.")
+        source.add_argument("--resume", type=Path, help="Restore an unfinished training checkpoint.")
         if stage == "sft":
-            source.add_argument("--continue-from", type=Path, help="Start a new stage from a saved SFT adapter.")
+            source.add_argument("--source", type=Path, help="Start a new stage from a saved SFT adapter.")
             command.add_argument("--additional-epochs", type=float,
-                                 help="Extra epochs in the new SFT stage; requires --continue-from.")
+                                 help="Extra epochs in the new SFT stage; requires --source.")
         else:
-            source.add_argument("--sft-source", type=Path, help="Initialize from a completed SFT final/ adapter.")
+            source.add_argument("--source", type=Path, help="Initialize from a completed SFT final/ adapter.")
         add_generation_arguments(command)
-        add_prepared_data_argument(command)
     args = parser.parse_args(argv)
     try:
-        common = dict(output_dir=args.output_dir, resume=args.resume_from_checkpoint,
-                      generation_config=args.generation_config, generation_backend=args.generation_backend,
-                      prepared_sft_data=args.prepared_sft_data)
+        common = dict(output_dir=args.output_dir, resume=args.resume, env=args.env,
+                      generation_config=args.generation_config, generation_backend=args.generation_backend)
         from utils.generation import load_generation_config
         fresh_process = load_generation_config(args.generation_config, args.generation_backend)["backend"] == "vllm"
         if args.stage == "sft":
             from utils.training.sft import train
-            final_dir = train(args.config, continue_from=args.continue_from,
+            final_dir = train(args.config, continue_from=args.source,
                               additional_epochs=args.additional_epochs, **common)
         elif args.stage == "dpo":
             from utils.training.dpo import train
-            final_dir = train(args.config, sft_source=args.sft_source, **common)
+            final_dir = train(args.config, sft_source=args.source, **common)
         else:
             from utils.training.grpo import load_config, train
-            final_dir = train(args.config, sft_source=args.sft_source, **common)
+            final_dir = train(args.config, sft_source=args.source, **common)
             fresh_process |= load_config(args.config)[0]["trainer"].get("use_vllm", False)
         if fresh_process:
-            exec_final_evaluation(final_dir, args.generation_config, args.generation_backend, args.prepared_sft_data)
+            exec_final_evaluation(final_dir, args.generation_config, args.generation_backend)
     except (OSError, TypeError, ValueError, KeyError) as error:
         parser.error(str(error))
 
@@ -67,12 +67,12 @@ def evaluate_after_training(final_dir, settings, *, model, tokenizer, dataset, d
 
 
 def evaluate_saved_training(final_dir, **evaluation_options):
-    from evaluate_checkpoint import evaluate_checkpoint
+    from evaluate import evaluate_checkpoint
     try:
         report = evaluate_checkpoint(final_dir, **evaluation_options)
     except (OSError, ValueError, RuntimeError) as error:
         raise RuntimeError(f"Local evaluation failed; training is saved at {final_dir}. "
-                           f"Run evaluate_checkpoint.py --checkpoint {final_dir} with the same generation settings, "
+                           f"Run evaluate.py --checkpoint {final_dir} with the same generation settings, "
                            "then summarize_evaluation.py --evaluation <evaluation-directory>.") from error
     from summarize_evaluation import summarize_evaluation
     try:
@@ -80,7 +80,7 @@ def evaluate_saved_training(final_dir, **evaluation_options):
     except (OSError, ValueError, RuntimeError) as error:
         raise RuntimeError(f"Scoring or report generation failed; training is saved at {final_dir}, "
                            f"and local evaluation at {report['directory']}. "
-                           "Continue with summarize_evaluation.py --resume-from <scoring-run printed above>; "
+                           "Continue with summarize_evaluation.py --resume <scoring-run printed above>; "
                            "add --no-api to inspect saved results.") from error
     return report
 
@@ -90,25 +90,22 @@ def saved_evaluation_main(argv):
     parser = argparse.ArgumentParser(description="Complete evaluation and summary after saved training.")
     parser.add_argument("--checkpoint", type=Path, required=True)
     add_generation_arguments(parser)
-    add_prepared_data_argument(parser)
     args = parser.parse_args(argv)
     return evaluate_saved_training(args.checkpoint, generation_config=args.generation_config,
-                                   generation_backend=args.generation_backend, prepared_sft_data=args.prepared_sft_data)
+                                   generation_backend=args.generation_backend)
 
 
-def exec_final_evaluation(final_dir, generation_config=None, generation_backend=None, prepared_sft_data=None):
+def exec_final_evaluation(final_dir, generation_config=None, generation_backend=None):
     """Replace the training process so no training CUDA context survives into vLLM."""
     args = [sys.executable, str(ROOT / "train.py"), FINAL_EVALUATION_FLAG,
             "--checkpoint", str(final_dir), "--generation-config", str(generation_config or GENERATION_CONFIG)]
     if generation_backend:
         args.extend(["--generation-backend", generation_backend])
-    if prepared_sft_data:
-        args.extend(["--prepared-sft-data", str(prepared_sft_data)])
     print(f"Starting saved-checkpoint evaluation and summary: {final_dir}", flush=True)
     try:
         os.execv(sys.executable, args)
     except OSError as error:
-        raise RuntimeError(f"Training is saved at {final_dir}; run evaluate_checkpoint.py --checkpoint {final_dir}, "
+        raise RuntimeError(f"Training is saved at {final_dir}; run evaluate.py --checkpoint {final_dir}, "
                            "then summarize_evaluation.py --evaluation <evaluation-directory> separately.") from error
 
 

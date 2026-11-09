@@ -9,7 +9,7 @@ from datasets.fingerprint import Hasher
 import torch
 from tqdm.auto import tqdm
 
-from utils.prepare_sft_data import (CONFIG_DIR, load_config, load_tokenizer, prepare_dataset,
+from utils.prepare_sft_data import (CONFIG_DIR, MODEL_NAME, load_config, load_tokenizer, prepare_dataset,
                               require_model, text_format, validate_precision)
 from utils.math_scoring import SCORING, score_answer
 from utils.math_data import OPENR1, dataset_label
@@ -17,7 +17,7 @@ from utils.generation import add_generation_arguments, create_generator, generat
 from utils.paths import ROOT
 from utils.evaluation_artifacts import EvaluationStore
 from utils.rule_scoring import PROTOCOL, apply_rule_scoring, saved_rule_result
-from utils.prepared_sft_data import (add_prepared_data_argument, ensure_prepared_sft_data, load_prepared_sft_data)
+from utils.prepared_sft_data import ensure_prepared_sft_data, load_prepared_sft_data
 from utils.training_workflow import data_plan, format_metrics, read_source
 
 DEFAULT_BATCH_SIZES = {"transformers": 4, "vllm": 64}
@@ -71,6 +71,8 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
                         model=None, tokenizer=None, dataset=None, data_info=None, config=None, disable_tqdm=False,
                         sft_source=None, batch_size=None, auto_batch_size=False,
                         generation_config=None, generation_backend=None, prepared_sft_data=None):
+    if str(checkpoint) == MODEL_NAME and model_name is None:
+        model_name, checkpoint = MODEL_NAME, None
     generation_settings = load_generation_config(generation_config, generation_backend)
     if auto_batch_size and generation_settings["backend"] != "transformers":
         raise ValueError("--auto-batch-size requires --generation-backend transformers; vLLM uses fixed chunks.")
@@ -79,9 +81,9 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
     if type(batch_size) is not int or batch_size < 1:
         raise ValueError("batch-size must be a positive integer.")
     if (checkpoint is None) == (model_name is None):
-        raise ValueError("Specify exactly one of checkpoint or model-name.")
+        raise ValueError("Specify exactly one model source.")
     if sft_source is not None and (checkpoint is not None or config is not None):
-        raise ValueError("Use sft-source only with model-name and without a separate config.")
+        raise ValueError("Use --source only with the original Qwen checkpoint and without a separate --config.")
     metadata = None
     stage = "original"
     if checkpoint is not None:
@@ -96,7 +98,7 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         if sft_source is not None:
             sft_source, metadata, _ = read_source(sft_source)
             if metadata.get("stage", "sft") != "sft":
-                raise ValueError("sft-source must be an SFT artifact.")
+                raise ValueError("--source must be an SFT artifact.")
             config = metadata["config"]
         config = config or load_config(CONFIG_DIR / "training/sft.yaml")
         require_model(model_name)
@@ -142,10 +144,15 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
         plan = store.metadata["data"]
     else:
         if dataset is None:
-            prepared_sft_data = ensure_prepared_sft_data(data_source, metadata, prepared_sft_data,
-                                                        metadata.get("prepared_sft_data") if metadata else None)
-            dataset, data_info = (load_prepared_sft_data(prepared_sft_data, config, tokenizer) if prepared_sft_data
-                                  else prepare_dataset(config, tokenizer))
+            if metadata and metadata.get("sft_data_cache") and prepared_sft_data is None:
+                from utils.data_preparation import load_reference, recipe
+                dataset = load_reference(metadata["sft_data_cache"], recipe("sft", config, tokenizer))
+                data_info = metadata["data"]["source"]
+            else:
+                prepared_sft_data = ensure_prepared_sft_data(data_source, metadata, prepared_sft_data,
+                                                            metadata.get("prepared_sft_data") if metadata else None)
+                dataset, data_info = (load_prepared_sft_data(prepared_sft_data, config, tokenizer) if prepared_sft_data
+                                      else prepare_dataset(config, tokenizer))
         elif data_info is None and metadata is not None:
             data_info = metadata["data"]["source"]
         plan = data_plan(dataset, metadata, data_info)
@@ -246,13 +253,12 @@ def evaluate_checkpoint(checkpoint=None, *, model_name=None, num_samples=None, o
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--checkpoint", type=Path, help="Current Instruct LoRA checkpoint or final directory.")
-    source.add_argument("--model-name", help="Original Instruct repository: Qwen/Qwen3-4B-Instruct-2507.")
+    parser.add_argument("--checkpoint", required=True,
+                        help="Qwen/Qwen3-4B-Instruct-2507 for the original model, or a project checkpoint/final directory.")
     evaluation_source = parser.add_mutually_exclusive_group()
     evaluation_source.add_argument("--config", type=Path,
                                    help="Original-model settings; default: configs/training/sft.yaml.")
-    evaluation_source.add_argument("--sft-source", type=Path,
+    evaluation_source.add_argument("--source", type=Path,
                                    help="Anchor original-model evaluation to the exact held-out split of an SFT artifact.")
     parser.add_argument("--num-samples", type=int, help="Evaluate the first N validation questions; default: all.")
     parser.add_argument("--batch-size", type=int,
@@ -263,15 +269,15 @@ def main():
     parser.add_argument("--output", type=Path, help="Evaluation directory; default: run/evaluations for LoRA, outputs/evaluations for original Instruct.")
     parser.add_argument("--device", choices=("cpu", "cuda"), help="Default: CUDA when available, otherwise CPU.")
     add_generation_arguments(parser)
-    add_prepared_data_argument(parser)
     args = parser.parse_args()
+    if args.config is not None and args.checkpoint != MODEL_NAME:
+        parser.error("Use --config only with the original Qwen checkpoint.")
     try:
-        evaluate_checkpoint(args.checkpoint, model_name=args.model_name, num_samples=args.num_samples,
+        evaluate_checkpoint(args.checkpoint, num_samples=args.num_samples,
                             output=args.output, device=args.device,
-                            config=load_config(args.config) if args.checkpoint is None and args.config else None,
-                            sft_source=args.sft_source, batch_size=args.batch_size, auto_batch_size=args.auto_batch_size,
-                            generation_config=args.generation_config, generation_backend=args.generation_backend,
-                            prepared_sft_data=args.prepared_sft_data)
+                            config=load_config(args.config) if args.config else None,
+                            sft_source=args.source, batch_size=args.batch_size, auto_batch_size=args.auto_batch_size,
+                            generation_config=args.generation_config, generation_backend=args.generation_backend)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 

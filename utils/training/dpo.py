@@ -19,7 +19,7 @@ from utils.prepare_sft_data import load_tokenizer, prepare_dataset, validate_pre
 from train import AdapterTrainerMixin, evaluate_after_training, load_training_model, require_resume_engine, save_final
 from utils.training_workflow import data_plan, read_source, reserve_directory, save_run
 from utils.generation import load_generation_config, package_version
-from utils.prepared_sft_data import ensure_prepared_sft_data, load_prepared_sft_data
+from utils.data_preparation import prepare_sft, prepare_stage
 
 
 class PreferenceTrainer(AdapterTrainerMixin, DPOTrainer):
@@ -69,7 +69,8 @@ def train(
     output_dir=None,
     generation_config=None,
     generation_backend=None,
-    prepared_sft_data=None
+    prepared_sft_data=None,
+    env="current"
 ):
     (config, length_limit) = load_config(config_path)
     settings = config['trainer']
@@ -84,7 +85,7 @@ def train(
         if saved.get('stage') != 'dpo':
             raise ValueError(f"Resume requires a DPO checkpoint.")
         if saved['data'].get('answer_format') != DPO_ANSWER_FORMAT:
-            raise ValueError('DPO checkpoint uses a different answer format. Start from the SFT final/ with --sft-source.')
+            raise ValueError('DPO checkpoint uses a different answer format. Start from the SFT final/ with --source.')
         if output_dir is not None and output_dir.expanduser().resolve() != resume.parent:
             raise ValueError("Resume uses the checkpoint's run directory.")
         for key in ('data', 'trainer', 'max_length', 'max_prompt_length'):
@@ -99,7 +100,9 @@ def train(
         evaluation['data_environment'] = sft['data_environment']
     with (sft_source / 'adapter_model.safetensors').open('rb') as weights:
         source_hash = hashlib.file_digest(weights, 'sha256').hexdigest()
-    if saved is not None and (evaluation != saved['evaluation'] or source_hash != saved['source_adapter_sha256']):
+    if saved is not None and (
+            any(evaluation[key] != saved['evaluation'][key] for key in ('config', 'data', 'text_format'))
+            or source_hash != saved['source_adapter_sha256']):
         raise ValueError('The source SFT artifact has changed since this stage started.')
     if resume is not None and (resume.parent / 'final' / 'run.json').is_file():
         raise ValueError('This stage already has a saved final adapter.')
@@ -110,17 +113,17 @@ def train(
     tokenizer = load_tokenizer(sft_source, local_files_only=True)
     run_path = resume.parent if resume is not None else output_dir or config['output_dir']
     args = training_arguments(settings, run_path, bf16, tokenizer)
-    prepared_sft_data = ensure_prepared_sft_data(sft_source, sft, prepared_sft_data, sft.get('prepared_sft_data'))
-    (
-        sft_data,
-        sft_info) = load_prepared_sft_data(prepared_sft_data,
-        sft_config,
-        tokenizer) if prepared_sft_data else prepare_dataset(sft_config,
-        tokenizer
-    )
+    sft_data, sft_info, sft_environment, sft_cache, prepared_sft_data = prepare_sft(
+        sft_config, tokenizer, source=sft_source, metadata=saved['evaluation'] if saved else sft,
+        env=env, prepared=prepared_sft_data, prepare=prepare_dataset)
     plan = data_plan(sft_data, sft, sft_info)
     held_out = sft_data.select(plan['validation_indices'])['question']
-    (train_data, train_info) = prepare_post_training_data('dpo', config['data'], tokenizer, held_out, length_limit)
+    train_data, train_info, environment, cache = prepare_stage(
+        'dpo', config['data'], tokenizer, held_out, length_limit,
+        env=env, metadata=saved, prepare=prepare_post_training_data)
+    evaluation['data_environment'] = sft_environment
+    if sft_cache:
+        evaluation['sft_data_cache'] = sft_cache
     metadata = {
         'stage': 'dpo',
         'config': config,
@@ -130,6 +133,9 @@ def train(
         'source_adapter': str(sft_source),
         'source_adapter_sha256': source_hash
     }
+    metadata['data_environment'] = environment
+    if cache:
+        metadata['training_data_cache'] = cache
     if prepared_sft_data:
         metadata['prepared_sft_data'] = str(Path(prepared_sft_data).expanduser().resolve())
     metadata["generation_engine"] = {

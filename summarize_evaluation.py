@@ -36,13 +36,13 @@ def atomic_write(path, text):
 def load_evaluation(path):
     store = EvaluationStore(path, root=ROOT)
     if store.metadata is None or not store.samples or len(store.answers) != len(store.samples):
-        raise ValueError("Complete generation and both local rule stages with evaluate_checkpoint.py first.")
+        raise ValueError("Complete generation and both local rule stages with evaluate.py first.")
     is_openr1 = store.metadata["data"]["source"]["name"] == OPENR1
     for row in store.answers:
         levels = store.judgments.get(row["index"], {})
         if 1 not in levels or (is_openr1 and not row["truncated"]
                                and levels[1]["status"] != "passed" and 2 not in levels):
-            raise ValueError("Complete both local rule stages with evaluate_checkpoint.py first.")
+            raise ValueError("Complete both local rule stages with evaluate.py first.")
     return store
 
 
@@ -255,14 +255,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--evaluation", type=Path, help="Completed local evaluation directory; create a new scoring run.")
-    source.add_argument("--resume-from", type=Path, help="Existing scoring run; reuse saved source, judge and decisions.")
+    source.add_argument("--resume", type=Path, help="Existing scoring run; reuse saved source, judge and decisions.")
     parser.add_argument("--no-api", action="store_true", help="Summarize saved decisions only; do not request API or credentials.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Judge YAML used when first enabling API scoring.")
     parser.add_argument("--retry-pending", action="store_true", help="With API enabled, retry saved pending decisions once.")
     parser.add_argument("--questions-per-file", type=int, default=100, help="Maximum questions per reading volume (default: 100).")
     args = parser.parse_args()
     try:
-        summarize_evaluation(args.evaluation, resume_from=args.resume_from, config_path=args.config,
+        summarize_evaluation(args.evaluation, resume_from=args.resume, config_path=args.config,
                              no_api=args.no_api, retry_pending=args.retry_pending,
                              questions_per_file=args.questions_per_file)
     except (OSError, ValueError) as error:
