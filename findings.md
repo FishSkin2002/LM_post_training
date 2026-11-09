@@ -1,5 +1,15 @@
 # 当前实现发现
 
+## README 参数核对（2026-11-09）
+
+- 当前公开名称仍为 evaluate_checkpoint.py、resume-from-checkpoint、continue-from、sft-source、prepared-sft-data 和汇总的 resume-from；文档必须使用实际名称。additional-epochs 仅用于 SFT 加训，与 continue-from 成对要求正数。
+- 默认公共生成配置 backend 为 vllm；显式 generation-backend 可选 vllm/transformers。独立生成评测 batch-size 的有效默认值分别为 64/4；auto-batch-size 只适用 Transformers。
+- 原始模型评测的 config 与 sft-source 互斥；训练产物评测配置来自 run.json。汇总继续运行时沿用已冻结裁判配置，仅首次启用 API 时读取 config；no-api 时 config 与 retry-pending 不生效。
+- 当前 README 末尾有一张脱离用途的重复 config 表，参数文档将按用途消除歧义。继续评分与重试待复核应分为独立用途，后者示例显式包含 retry-pending。
+- 保存讨论快照时，附加导出 patch 的临时脚本误用了 check_output(check=False) 并报错；三个规划快照已完整保存、工作文件已恢复已提交基线。已核对备份三文件存在并继续，不涉及 Git 历史修改。
+- 最终文档按 13 个用途覆盖全部适用参数；未把用途已选定的互斥来源列为可选来源。help 在参考顶部共用说明；no-api 用途中 config/retry-pending 不生效，在正文明确，参数表仅列适用项。原始模型有无 sft-source 的 prepared 数据默认行为分别说明，避免混淆。
+- 文档检查脚本位于 /tmp/qwen-check-script-docs.py，仅提取解析器定义并解析占位路径，不执行训练/评测；5 组实际帮助输出均成功，临时输出位于 /tmp/qwen-readme-*-help.txt。
+
 ## 训练结束编排调查（2026-11-09）
 
 - 三种训练方法都在 save_final 后调用 train.evaluate_after_training；原生路径此时复用模型完成一二级。vLLM 或训练期 GRPO 使用 vLLM 时，方法返回后由 train.main 执行 os.execv 释放原进程资源。
