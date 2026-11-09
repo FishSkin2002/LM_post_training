@@ -16,7 +16,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import summarize_evaluation as summary
-from tools.test_rescore_evaluation import completion, response, row
+from tools.test_answer_judge import completion, response, row
 from utils import answer_judge as api, rule_scoring as rules
 from utils.evaluation_artifacts import EvaluationStore
 

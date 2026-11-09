@@ -70,8 +70,18 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(migration.migrate_sft(self.source), self.target)
         restored, info = load_prepared_sft_data(self.target, self.fixture.config, self.fixture.tokenizer)
         self.assertEqual(restored.to_list(), self.dataset.to_list())
+        self.assertEqual(restored._fingerprint, self.dataset._fingerprint)
+        self.assertEqual(info, self.info)
         self.assertEqual(data_plan(restored, self.metadata, info), self.metadata["data"])
         self.assertEqual(original, {p.name: p.read_bytes() for p in self.source.iterdir() if p.is_file()})
+        with self.assertRaises(ValueError):
+            load_prepared_sft_data(self.target, {**self.fixture.config, "max_length": 1}, self.fixture.tokenizer)
+        manifest_path = self.target / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["fingerprint"] = "changed"
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, "identity"):
+            load_prepared_sft_data(self.target, self.fixture.config, self.fixture.tokenizer)
 
     def test_ordinary_evaluation_and_original_control_discover_cache(self):
         with patch.object(migration, "ensure_compatibility_environment", return_value=Path("/managed/python")), \
