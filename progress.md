@@ -1,5 +1,14 @@
 # 当前进展
 
+## 2026-11-09：README 简明示例与参数参考
+
+- 用户要求先整理当前使用文档：README 仅简短用途说明与填好必需参数的命令，链接独立的三列参数参考。参数参考覆盖必需和适用可选参数，合并说明可填项及用途。
+- 已核对实际 train/evaluate_checkpoint/summarize_evaluation 与公共参数、生成配置；本轮保留当前脚本名和参数名，不实施接口讨论中的目标。
+- 已通过受控入口从最新 main 创建 codex/readme-script-parameter-reference。此前未提交的讨论规划原文已保存在 /tmp/qwen-interface-discussion-u0vrbgxk/，本轮规划从已提交基线续写，不混入未决设计。用户研究文件保留。
+- README 脚本说明已精简为 13 个用途的简短说明及必要命令，新增 docs/script-arguments.md 承载三列参数参考；补齐 additional-epochs，并将继续评分和重试待复核拆成两个准确示例。其余 README 章节逐字保持。
+- 从当前脚本参数构造代码提取实际解析器，13 个示例全部可解析；13 个用途表覆盖全部适用 CLI 选项，必需项均在示例中。实际配置默认值、三列表格与 5 个本地链接/锚点核对通过；SFT/DPO/GRPO、独立评测与汇总的 5 组 --help 均正常退出。
+- git diff --check 发现 README 末尾多余空行，已修正并复核。一次 open 查询仅见其他任务 PR33；未读取 PR 内容或评审，准备单独交付使用文档。
+
 ## 2026-11-09：训练结束自动评测与汇总
 
 - 用户要求继续，提交关系确认 PR65/773663a 已合入 main/8f7d342，受控入口创建 `codex/training-final-summary`。一次 open 查询仅见其他任务 PR33，未读取 PR 内容或评审。

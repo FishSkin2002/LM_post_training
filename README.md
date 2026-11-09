@@ -123,218 +123,120 @@ python -m pip install -r requirements.txt
 
 ## 主要脚本使用说明
 
+以下按用途给出填好必需参数的示例；将 `/path/to/...` 替换为实际路径。全部参数的默认值、可填内容及作用见 [脚本参数参考](docs/script-arguments.md)。
+
 ### train.py
 
-执行 SFT、DPO 或 GRPO 训练，支持各自的断点恢复。
-
-首次读取旧 SFT 产物且没有可用数据缓存时，会自动创建 CPU 兼容环境并准备数据，后续复用缓存。各方法正常结束后，先保存 `final/` 和训练状态，再自动完成全量验证集一二级评测、默认启用 API 的三级判定与汇总，生成分卷问答及核查清单。需要 API 且未设置 `DEEPSEEK_API_KEY` 时，在此时通过终端隐藏输入密钥。
-
-训练中断不触发结束评测。若训练已保存而后续评测失败，可单独评测 `final/`；若仅判分或阅读报告失败，沿用终端打印的评分目录，通过 `summarize_evaluation.py --resume-from` 继续，或加 `--no-api` 查看已有结果，无需重新训练。
+执行 SFT、DPO 或 GRPO 训练；正常结束保存模型，并自动完成验证集生成评测、大模型判分及报告汇总。
 
 #### SFT：发起新训练
+
+从原始 Instruct 模型开始训练。
 
 ```bash
 python train.py sft
 ```
 
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/sft.yaml` | 选择模型、数据与训练设置。 |
-| `--output-dir` | 配置中的输出目录 | 指定新运行目录，重名自动加后缀。 |
-| `--generation-config` | `configs/generation.yaml` | 设置训练结束后的生成评测。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按来源自动准备或复用 | 指定已有数据缓存目录。 |
-
 #### SFT：恢复未完成的训练
+
+从完整断点恢复原训练进度，沿用原运行目录。
 
 ```bash
 python train.py sft --resume-from-checkpoint /path/to/sft-run/checkpoint-5000
 ```
 
-将路径替换为完整断点，恢复原训练进度；Ctrl+C 后从最近保存的断点继续。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/sft.yaml` | 选择与断点一致的训练配置。 |
-| `--output-dir` | 断点所属运行目录 | 显式填写时须为同一目录。 |
-| `--generation-config` | `configs/generation.yaml` | 设置训练结束后的生成评测。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
-
 #### SFT：完成后加训
+
+从已有 SFT 权重开启新运行，示例追加训练 1 轮。
 
 ```bash
 python train.py sft --continue-from /path/to/sft-run/final --additional-epochs 1
 ```
 
-将路径替换为已完成 SFT 的 `final/`；`--additional-epochs` 为追加轮数，可填正小数。加训创建新运行。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/sft.yaml` | 设置本次加训，保持来源所需配置一致。 |
-| `--output-dir` | 配置中的输出目录，重名加后缀 | 指定新的加训目录。 |
-| `--generation-config` | `configs/generation.yaml` | 设置加训结束后的生成评测。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
-
 #### DPO：从 SFT 开始训练
+
+使用已完成的 SFT `final/` 开始独立的 DPO 训练。
 
 ```bash
 python train.py dpo --sft-source /path/to/sft-run/final
 ```
 
-将路径替换为已完成 SFT 的 `final/`，新建一次 DPO 训练。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/dpo.yaml` | 选择偏好数据与 DPO 训练设置。 |
-| `--output-dir` | DPO 配置中的输出目录 | 指定新运行目录，重名自动加后缀。 |
-| `--generation-config` | `configs/generation.yaml` | 设置 DPO 结束后的生成评测。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
-
 #### DPO：恢复未完成的训练
+
+恢复 DPO 完整断点；来源 SFT 产物需保留在原路径。
 
 ```bash
 python train.py dpo --resume-from-checkpoint /path/to/dpo-run/checkpoint-100
 ```
 
-将路径替换为 DPO 的完整断点；原 SFT `final/` 需保留在保存时的路径。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/dpo.yaml` | 选择与 DPO 断点一致的配置。 |
-| `--output-dir` | 断点所属运行目录 | 显式填写时须为同一目录。 |
-| `--generation-config` | `configs/generation.yaml` | 设置 DPO 结束后的生成评测。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
-
 #### GRPO：从 SFT 开始训练
+
+使用已完成的 SFT `final/` 开始独立的 GRPO 训练。
 
 ```bash
 python train.py grpo --sft-source /path/to/sft-run/final
 ```
 
-将路径替换为已完成 SFT 的 `final/`，新建一次 GRPO 训练。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/grpo.yaml` | 选择数学题数据与 GRPO 训练设置。 |
-| `--output-dir` | GRPO 配置中的输出目录 | 指定新运行目录，重名自动加后缀。 |
-| `--generation-config` | `configs/generation.yaml` | 设置 GRPO 结束后的生成评测。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
-
 #### GRPO：恢复未完成的训练
+
+恢复 GRPO 完整断点；来源 SFT 产物需保留在原路径。
 
 ```bash
 python train.py grpo --resume-from-checkpoint /path/to/grpo-run/checkpoint-100
 ```
 
-将路径替换为 GRPO 的完整断点；原 SFT `final/` 需保留在保存时的路径。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/grpo.yaml` | 选择与 GRPO 断点一致的配置。 |
-| `--output-dir` | 断点所属运行目录 | 显式填写时须为同一目录。 |
-| `--generation-config` | `configs/generation.yaml` | 设置 GRPO 结束后的生成评测。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按 SFT 来源自动准备或复用 | 指定源 SFT 的数据缓存。 |
-
 ### evaluate_checkpoint.py
 
-生成原始模型或训练产物的验证集回答，并完成一二级判分。
-
-首次读取旧 SFT 产物且缺少数据缓存时，会自动创建 CPU 兼容环境并准备数据。中断后重跑相同命令会继续已有进度；需要从头评测时用 `--output` 指定新目录。评测保存共享样本快照、元数据和两个 JSONL，终端显示一级指标，此阶段不生成 Markdown。已保存回答的后续判定直接读取快照，无需重新读取原数据集。
-
-已有旧格式报告或进度占用同名位置时，用 `--output` 选择新目录开始新格式评测；旧文件保持原样。
+生成验证集回答并完成一二级判分；中断后重跑相同命令会继续已有进度。
 
 #### 评测原始模型
+
+使用默认评测配置，评测原始 Instruct 模型。
 
 ```bash
 python evaluate_checkpoint.py --model-name Qwen/Qwen3-4B-Instruct-2507
 ```
 
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/training/sft.yaml` | 设置评测数据与生成预算。 |
-| `--sft-source` | 使用配置确定的划分 | 指向 SFT `final/`，使用其保存的评测配置与划分；与 `--config` 互斥。 |
-| `--num-samples` | 完整验证集 | 评测固定顺序的前 N 题，须为不超过验证集大小的正整数。 |
-| `--batch-size` | vLLM：`64`；Transformers：`4` | 每次提交的最大题数，须为正整数；Transformers 自适应模式下为起始题数。 |
-| `--auto-batch-size` | 固定批大小 | 仅限 Transformers：成功时增大批次，生成失败后缩小重试；与 vLLM 同用会报错。 |
-| `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足配置的精度要求。 |
-| `--output` | `outputs/evaluations/` 下自动命名 | 指定保存元数据、回答和判决的评测目录。 |
-| `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
-
 #### 评测训练产物
+
+评测 SFT、DPO 或 GRPO 的 `final/` 或 `checkpoint-<step>/`，自动读取保存的评测配置与划分。
 
 ```bash
 python evaluate_checkpoint.py --checkpoint /path/to/run/final
 ```
 
-将路径替换为 SFT、DPO 或 GRPO 的 `final/` 或 `checkpoint-<step>/`。省略题数时评测完整验证集。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--num-samples` | 完整验证集 | 评测固定顺序的前 N 题，须为不超过验证集大小的正整数。 |
-| `--batch-size` | vLLM：`64`；Transformers：`4` | 每次提交的最大题数，须为正整数；Transformers 自适应模式下为起始题数。 |
-| `--auto-batch-size` | 固定批大小 | 仅限 Transformers：成功时增大批次，生成失败后缩小重试；与 vLLM 同用会报错。 |
-| `--device` | 自动选择 CUDA 或 CPU | 可填 `cuda` 或 `cpu`，须满足来源精度要求。 |
-| `--output` | 运行目录的 `evaluations/` 下自动命名 | 指定保存元数据、回答和判决的评测目录。 |
-| `--generation-config` | `configs/generation.yaml` | 选择生成配置。 |
-| `--generation-backend` | 配置中的引擎，默认 `vllm` | 可填 `vllm` 或 `transformers`。 |
-| `--prepared-sft-data` | 按来源自动准备或复用 | 指定来源匹配的数据缓存。 |
-
 ### summarize_evaluation.py
 
-汇总已保存回答的正确性，默认通过 API 补做尚未处理的三级判定，正常结束后生成阅读报告。
-
-默认使用 DeepSeek Flash，关闭思考模式，仅核对最终答案；完整提示词见 [JUDGE_PROMPT](utils/answer_judge.py)。需要 API 时，先读取 `DEEPSEEK_API_KEY`；缺少密钥则在终端隐藏输入，仅供本次运行使用。取消输入或中断时保留机器进度，不刷新阅读报告。
+汇总已有回答，默认通过 API 补做三级判定，正常结束后生成问答分卷与核查清单。
 
 #### 新建评分并汇总
+
+选择一二级评测目录，创建独立评分；终端打印本次评分目录。
 
 ```bash
 python summarize_evaluation.py --evaluation /path/to/evaluation
 ```
 
-将路径替换为含 `metadata.json`、`answers.jsonl`、`judgments.jsonl` 的一二级评测目录。每次新建独立评分，终端打印实际评分目录；更换裁判设置时也新建评分。题目、回答和前级判决共用，已有历史报告保持原样。
+#### 继续评分
 
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/evaluation/deepseek.yaml` | 第一次实际启用 API 时选择服务、模型与请求设置。 |
-| `--no-api` | 补做剩余三级判定 | 只汇总现有一二级结果，不读取裁判配置或索取密钥。 |
-| `--questions-per-file` | `100` | 每份问答 Markdown 的题数上限，须为正整数。 |
-
-#### 继续评分或重试待复核题
+使用已有评分目录，沿用原裁判设置和已保存判决，继续处理未完成的题。
 
 ```bash
 python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring
 ```
 
-将路径替换为之前打印的评分目录；与 `--evaluation` 互斥。继续沿用已保存裁判设置和提示，只处理未完成的题。已保存的待复核也算已处理，正常续跑不自动重试。
+#### 重试待复核题
 
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--retry-pending` | 复用待复核判决 | 同时重新请求本次评分中的待复核题，追加新判决。 |
-| `--config` | 沿用原裁判设置 | 原评分尚未启用 API 时，指定首次使用的裁判配置。 |
-| `--questions-per-file` | `100` | 调整问答分卷上限，重新生成阅读版。 |
+继续已有评分，同时对待复核题重新请求 API。
+
+```bash
+python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring --retry-pending
+```
 
 #### 只查看已有结果
+
+汇总所选评分已有的完整或部分结果，不请求 API。
 
 ```bash
 python summarize_evaluation.py --resume-from /path/to/evaluation/scorings/scoring --no-api
 ```
-
-此模式不请求 API、不重试待复核或索取密钥，可查看中断后的部分结果；未处理、待复核、明确错误分开统计，总题数保持不变。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--questions-per-file` | `100` | 调整每份问答 Markdown 的题数上限。 |
-
-阅读文件位于原评测目录，反映本次选定的评分；再次成功汇总会替换同名阅读版。完整问答只保存在 `answers-0001.md` 等分卷中，判定原因放在两类 API 清单，通过链接定位原题；API 原始响应与用量保存在判决 JSONL 中。
-
-| 可选参数 | 默认行为 | 用途 |
-| --- | --- | --- |
-| `--config` | `configs/evaluation/deepseek.yaml` | 沿用首次判分的模型服务配置。 |
