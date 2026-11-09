@@ -1,5 +1,12 @@
 # 当前实现发现
 
+## 使用文档分工规则核对（2026-11-09）
+
+- PR67 已由用户确认合入，最新 main/1271647 包含简明 README 与 docs/script-arguments.md。运行代码未变，本轮无需重复运行训练或帮助命令。
+- 需要同步的规则集中在 docs/readme-writing.md：旧的“示例下方列常用参数”与当前独立参考冲突，且未明确全部适用参数、独立默认列和条件必填参数的展示方式。
+- docs/automatic-sft-migration.md 的验收段另要求在 README 脚本下提示兼容准备，应同步指向参数参考；其余相关约定均引用 README 编写约定，无需复制规则或修改运行行为。
+- 规则验证覆盖 13 个本地链接/锚点、README 不含参数表且链接独立参考、两处文档的 13 个用途对应及固定三列、旧展示要求无残留和五文件差异边界。README 与参数参考内容未变，运行代码未变，未重复执行无关模型测试。
+
 ## README 参数核对（2026-11-09）
 
 - 当前公开名称仍为 evaluate_checkpoint.py、resume-from-checkpoint、continue-from、sft-source、prepared-sft-data 和汇总的 resume-from；文档必须使用实际名称。additional-epochs 仅用于 SFT 加训，与 continue-from 成对要求正数。
