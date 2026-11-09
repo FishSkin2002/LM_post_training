@@ -1,4 +1,18 @@
-# 当前计划：解决 PR69 与已合入 PR68 的冲突
+# 当前计划：实现脚本接口精简
+
+用户已确认 PR69 完成并要求改代码；受控入口从 main/099768a 创建 codex/simplify-script-interfaces。本轮完整实现已合入的 docs/script-interface.md：统一公开 resume/source，保留 additional-epochs，训练提供默认 current 的 env，评测更名并统一 checkpoint，删除公开 prepared 数据参数但保留现有内部定位。不新增缓存缺失恢复或跨机器搬移能力。
+
+| 本轮工作 | 状态 | 完成条件 |
+| --- | --- | --- |
+| 恢复与设计核对 | complete | PR69 已在最新 main，读取接口/样本/训练/README 约定，保留用户研究文件与工具独立维护边界。 |
+| 入口与参数 | complete | 已更名评测入口并统一公开参数，删除手工 prepared 选项；调用/提示/测试引用已同步，原始模型 source 边界保留。 |
+| 数据准备环境 | complete | 已实现显式 current/legacy 与原生 Arrow 引用交接，三模式共享准备边界，记录实际生产环境，历史缓存继续读取。 |
+| 验证与配套文档 | complete | 121 项离线/微型回归通过；13 个 README 示例、13 张用途参数表、默认值/链接、5 组帮助和语法检查通过。 |
+| 交付 | complete | 功能提交 5c59c9e 已通过受控入口正常推送，并创建 [PR70](https://github.com/FishSkin2002/LM_post_training/pull/70)；验证与实测边界已写入 PR，等待用户审查合入及下一指令。 |
+
+现有兼容导出用于历史来源仍保留；新的环境间数据交接优先引用 Hugging Face 原生中间缓存及小份元数据，避免再导出完整处理集。本轮不安装真实兼容环境、不启动完整训练或付费 API。受控 Git 入口此前已获批修复，其仓库源码同步不混入本功能。
+
+## 已完成：解决 PR69 与已合入 PR68 的冲突
 
 用户于 2026-11-09 确认已合入 PR68，并要求本地解决冲突后更新 PR69。本轮在 codex/script-interface-simplification-policy 保留双方历史与要求，仅追加合并提交并正常推送，不开始功能实现。
 

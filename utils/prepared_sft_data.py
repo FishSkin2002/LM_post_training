@@ -8,7 +8,6 @@ import subprocess
 from datasets import load_from_disk
 
 from utils.prepare_sft_data import text_format
-from utils.arguments import add_prepared_data_argument
 
 
 def data_environment():

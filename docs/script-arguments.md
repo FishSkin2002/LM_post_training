@@ -12,11 +12,11 @@
 
 ## train.py
 
-先选择 `sft`、`dpo` 或 `grpo` 子命令。训练来源参数互斥；各用途所需来源已在对应表中列出。
+先选择 `sft`、`dpo` 或 `grpo` 子命令。`--source` 与 `--resume` 互斥；前者选择新阶段起点，后者恢复原训练状态。各用途所需来源在对应表中列出。
 
 正常结束先保存 `final/` 和训练状态，再自动执行完整验证集的一二级评测、API 三级判定及报告汇总。需要 API 时读取 `DEEPSEEK_API_KEY`，未设置则在终端隐藏输入。训练中断不触发结束评测；后续评测失败不影响已保存的训练产物。
 
-首次读取需要兼容处理的旧 SFT 来源且没有可用缓存时，当前程序会自动创建 CPU 兼容环境并准备数据；后续复用缓存。`--prepared-sft-data` 指定的是已筛选、分词的 SFT 数据；DPO、GRPO 用它恢复共同的 SFT 验证数据，不用它替代各自的训练数据。
+数据准备默认使用当前环境；显式 `--env legacy` 时，程序定位或创建受管的 CPU 旧环境准备所需数据，模型训练仍在主环境执行。已有可用缓存优先复用，读取时不启动旧环境。数据处理产生的 Arrow 文件继续保存在公共缓存中，运行记录只引用数据文件、筛选索引及其身份。历史 `prepared-sft/` 缓存的自动读取保留。
 
 ### SFT：发起新训练
 
@@ -25,10 +25,10 @@
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
 | `--config` | `configs/training/sft.yaml` | 训练配置文件路径；选择模型、数据和训练设置。 |
+| `--env` | `current` | `current` 或 `legacy`；选择数据准备环境。`current` 不安装或调用旧环境，`legacy` 使用项目固定的旧环境；已有兼容缓存优先复用。 |
 | `--output-dir` | 配置中的 `output_dir` | 目录路径；指定本次 SFT 的新运行目录，重名自动加 `-1`、`-2` 等后缀。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置训练结束后的生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择训练结束后评测使用的生成引擎。 |
-| `--prepared-sft-data` | 未指定；使用当前环境的数据准备与缓存 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与本次数据及分词设置一致。 |
 
 ### SFT：恢复未完成的训练
 
@@ -36,12 +36,12 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--resume-from-checkpoint` | 无；本用途必填 | SFT 的完整 `checkpoint-<step>/` 目录；恢复模型、优化器、调度器及训练进度。 |
+| `--resume` | 无；本用途必填 | SFT 的完整 `checkpoint-<step>/` 目录；恢复模型、优化器、调度器及训练进度。 |
 | `--config` | `configs/training/sft.yaml` | 训练配置文件路径；必须与断点保存的训练配置一致。 |
+| `--env` | `current` | `current` 或 `legacy`；选择数据准备环境。`current` 不安装或调用旧环境，`legacy` 使用项目固定的旧环境；已有兼容缓存优先复用。 |
 | `--output-dir` | 断点所属运行目录 | 目录路径；显式填写时必须仍为断点所属运行目录。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置训练结束后的生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择训练结束后评测使用的生成引擎。 |
-| `--prepared-sft-data` | 未指定；按来源自动定位缓存，必要时准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与来源数据及分词设置一致。 |
 
 ### SFT：完成后加训
 
@@ -49,13 +49,13 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--continue-from` | 无；本用途必填 | 已保存的 SFT 适配器目录，通常为 `final/`；选择本次加训的初始权重。 |
-| `--additional-epochs` | 无；本用途必填 | 有限正数，可填 `1`、`0.5` 等；指定本次新阶段追加的训练轮数，须与 `--continue-from` 同时填写。 |
+| `--source` | 无；本用途必填 | 已保存的 SFT 适配器目录，通常为 `final/`；选择本次加训的初始权重。 |
+| `--additional-epochs` | 无；本用途必填 | 有限正数，可填 `1`、`0.5` 等；指定本次新阶段追加的训练轮数，须与 `--source` 同时填写。 |
 | `--config` | `configs/training/sft.yaml` | 训练配置文件路径；设置本次加训，模型、数据、分词和 LoRA 等须与来源一致。 |
+| `--env` | `current` | `current` 或 `legacy`；选择数据准备环境。`current` 不安装或调用旧环境，`legacy` 使用项目固定的旧环境；已有兼容缓存优先复用。 |
 | `--output-dir` | 配置中的 `output_dir` | 目录路径；指定本次 SFT 加训的新运行目录，重名自动加 `-1`、`-2` 等后缀。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置训练结束后的生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择训练结束后评测使用的生成引擎。 |
-| `--prepared-sft-data` | 未指定；按来源自动定位缓存，必要时准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与来源数据及分词设置一致。 |
 
 ### DPO：从 SFT 开始训练
 
@@ -63,12 +63,12 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--sft-source` | 无；本用途必填 | 已完成 SFT 的 `final/` 目录；读取初始模型、分词器及共同评测来源。 |
+| `--source` | 无；本用途必填 | 已完成 SFT 的 `final/` 目录；读取初始模型、分词器及共同评测来源。 |
 | `--config` | `configs/training/dpo.yaml` | 训练配置文件路径；选择偏好数据与 DPO 训练设置。 |
+| `--env` | `current` | `current` 或 `legacy`；选择数据准备环境。`current` 不安装或调用旧环境，`legacy` 使用项目固定的旧环境；已有兼容缓存优先复用。 |
 | `--output-dir` | 配置中的 `output_dir` | 目录路径；指定本次 DPO 的新运行目录，重名自动加 `-1`、`-2` 等后缀。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置训练结束后的生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择训练结束后评测使用的生成引擎。 |
-| `--prepared-sft-data` | 未指定；按来源自动定位缓存，必要时准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与来源数据及分词设置一致。 |
 
 ### DPO：恢复未完成的训练
 
@@ -76,12 +76,12 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--resume-from-checkpoint` | 无；本用途必填 | DPO 的完整 `checkpoint-<step>/` 目录；恢复该阶段的训练状态与进度。 |
+| `--resume` | 无；本用途必填 | DPO 的完整 `checkpoint-<step>/` 目录；恢复该阶段的训练状态与进度。 |
 | `--config` | `configs/training/dpo.yaml` | 训练配置文件路径；必须与 DPO 断点保存的配置一致。 |
+| `--env` | `current` | `current` 或 `legacy`；选择数据准备环境。`current` 不安装或调用旧环境，`legacy` 使用项目固定的旧环境；已有兼容缓存优先复用。 |
 | `--output-dir` | 断点所属运行目录 | 目录路径；显式填写时必须仍为断点所属运行目录。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置训练结束后的生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择训练结束后评测使用的生成引擎。 |
-| `--prepared-sft-data` | 未指定；按来源自动定位缓存，必要时准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与来源数据及分词设置一致。 |
 
 ### GRPO：从 SFT 开始训练
 
@@ -89,12 +89,12 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--sft-source` | 无；本用途必填 | 已完成 SFT 的 `final/` 目录；读取初始模型、分词器及共同评测来源。 |
+| `--source` | 无；本用途必填 | 已完成 SFT 的 `final/` 目录；读取初始模型、分词器及共同评测来源。 |
 | `--config` | `configs/training/grpo.yaml` | 训练配置文件路径；选择数学题数据与 GRPO 训练设置。 |
+| `--env` | `current` | `current` 或 `legacy`；选择数据准备环境。`current` 不安装或调用旧环境，`legacy` 使用项目固定的旧环境；已有兼容缓存优先复用。 |
 | `--output-dir` | 配置中的 `output_dir` | 目录路径；指定本次 GRPO 的新运行目录，重名自动加 `-1`、`-2` 等后缀。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置训练结束后的生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择训练结束后评测使用的生成引擎。 |
-| `--prepared-sft-data` | 未指定；按来源自动定位缓存，必要时准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与来源数据及分词设置一致。 |
 
 ### GRPO：恢复未完成的训练
 
@@ -102,16 +102,16 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--resume-from-checkpoint` | 无；本用途必填 | GRPO 的完整 `checkpoint-<step>/` 目录；恢复该阶段的训练状态与进度。 |
+| `--resume` | 无；本用途必填 | GRPO 的完整 `checkpoint-<step>/` 目录；恢复该阶段的训练状态与进度。 |
 | `--config` | `configs/training/grpo.yaml` | 训练配置文件路径；必须与 GRPO 断点保存的配置一致。 |
+| `--env` | `current` | `current` 或 `legacy`；选择数据准备环境。`current` 不安装或调用旧环境，`legacy` 使用项目固定的旧环境；已有兼容缓存优先复用。 |
 | `--output-dir` | 断点所属运行目录 | 目录路径；显式填写时必须仍为断点所属运行目录。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置训练结束后的生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择训练结束后评测使用的生成引擎。 |
-| `--prepared-sft-data` | 未指定；按来源自动定位缓存，必要时准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与来源数据及分词设置一致。 |
 
-## evaluate_checkpoint.py
+## evaluate.py
 
-生成验证集回答并完成一二级判分，不自动调用 API 汇总。使用 `--checkpoint` 或 `--model-name` 二选一。
+生成验证集回答并完成一二级判分，不自动调用 API 汇总。统一使用必填的 `--checkpoint` 选择官方原始模型标识或本地训练产物目录。
 
 中断后重跑相同命令会继续已有回答和判分进度；从头评测使用新的 `--output`。题目和参考答案保存在共享快照中，元数据、回答和判决保存在评测目录，此阶段不生成 Markdown。已有旧格式报告或进度占用同名位置时，需选择新的输出目录。
 
@@ -119,13 +119,13 @@
 
 ### 评测原始模型
 
-评测尚未接受本项目训练的原始 Instruct 模型。`--config` 与 `--sft-source` 互斥。
+评测尚未接受本项目训练的原始 Instruct 模型。`--config` 与 `--source` 互斥。
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--model-name` | 无；本用途必填 | `Qwen/Qwen3-4B-Instruct-2507`；选择原始模型，不加载本项目 LoRA。 |
+| `--checkpoint` | 无；本用途必填 | `Qwen/Qwen3-4B-Instruct-2507`；选择原始模型，不加载本项目 LoRA。 |
 | `--config` | `configs/training/sft.yaml` | SFT 配置文件路径；确定评测数据、长度和生成预算。 |
-| `--sft-source` | 未指定；按配置确定评测数据及划分 | SFT 的 `final/` 或 `checkpoint-<step>/` 目录；使用其保存的评测配置和验证集划分，不加载它的模型权重。 |
+| `--source` | 未指定；按配置确定评测数据及划分 | SFT 的 `final/` 或 `checkpoint-<step>/` 目录；使用其保存的评测配置和验证集划分，不加载它的模型权重。 |
 | `--num-samples` | 完整验证集 | 不超过验证集大小的正整数；评测固定顺序的前 N 题。 |
 | `--batch-size` | vLLM：`64`；Transformers：`4` | 正整数；每次生成提交的最大题数，在自适应模式下为起始题数。 |
 | `--auto-batch-size` | 关闭（固定批大小） | 开关；仅限 Transformers，成功时增大批次，首次生成异常后缩小重试；与 vLLM 不能同时使用。 |
@@ -133,7 +133,6 @@
 | `--output` | 仓库 `outputs/evaluations/` 下自动命名 | 评测目录路径；指定元数据、回答和判决的保存位置，使用新目录可从头评测。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置本次生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择生成引擎。 |
-| `--prepared-sft-data` | 未指定；有 `--sft-source` 时按来源定位，否则按配置准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；覆盖自动定位结果，须与评测数据及分词设置一致。 |
 
 ### 评测训练产物
 
@@ -149,11 +148,10 @@
 | `--output` | 运行目录的 `evaluations/` 下自动命名 | 评测目录路径；指定元数据、回答和判决的保存位置，使用新目录可从头评测。 |
 | `--generation-config` | `configs/generation.yaml` | 生成配置文件路径；设置本次生成评测。 |
 | `--generation-backend` | `vllm`（由生成配置决定） | `vllm` 或 `transformers`；选择生成引擎。 |
-| `--prepared-sft-data` | 未指定；按来源自动定位缓存，必要时准备 | 已准备的 SFT 数据目录，包含 `manifest.json` 和 `dataset/`；显式指定时须与来源数据及分词设置一致。 |
 
 ## summarize_evaluation.py
 
-读取已完成的一二级结果，默认通过 API 补做尚未处理的三级判定，再汇总并生成阅读报告。`--evaluation` 与 `--resume-from` 二选一。
+读取已完成的一二级结果，默认通过 API 补做尚未处理的三级判定，再汇总并生成阅读报告。`--evaluation` 与 `--resume` 二选一。
 
 当前默认裁判为 DeepSeek Flash，关闭思考模式，完整提示见 [JUDGE_PROMPT](../utils/answer_judge.py)。需要 API 时先读取 `DEEPSEEK_API_KEY`，缺少则在终端隐藏输入；密钥仅供本次运行使用。取消输入或中断会保留机器进度，不刷新阅读报告。
 
@@ -177,7 +175,7 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--resume-from` | 无；本用途必填 | 已有评分目录，如 `<评测目录>/scorings/scoring/`；沿用保存的回答来源、裁判设置和判决。 |
+| `--resume` | 无；本用途必填 | 已有评分目录，如 `<评测目录>/scorings/scoring/`；沿用保存的回答来源、裁判设置和判决。 |
 | `--config` | `configs/evaluation/deepseek.yaml`（仅首次启用 API 时使用） | 裁判配置文件路径；已有裁判设置时沿用已保存配置和提示，尚未启用 API 时才读取该文件。 |
 | `--no-api` | 关闭 | 开关；仅汇总已保存结果，不请求 API，也不读取裁判配置或索取密钥。 |
 | `--retry-pending` | 关闭 | 开关；在处理未完成题目之外，再请求所选评分中已保存的待复核题，追加新判决。 |
@@ -189,7 +187,7 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--resume-from` | 无；本用途必填 | 已有评分目录，如 `<评测目录>/scorings/scoring/`；沿用保存的回答来源、裁判设置和判决。 |
+| `--resume` | 无；本用途必填 | 已有评分目录，如 `<评测目录>/scorings/scoring/`；沿用保存的回答来源、裁判设置和判决。 |
 | `--retry-pending` | 关闭；本用途须开启 | 开关；同时处理未完成的题，并对所选评分的待复核题重新请求 API，追加新判决。 |
 | `--config` | `configs/evaluation/deepseek.yaml`（仅首次启用 API 时使用） | 裁判配置文件路径；已有裁判设置时沿用已保存配置和提示，尚未启用 API 时才读取该文件。 |
 | `--no-api` | 关闭 | 开关；仅汇总已保存结果，不请求 API，也不读取裁判配置或索取密钥。 |
@@ -201,6 +199,6 @@
 
 | 参数 | 默认值 | 可填内容及作用 |
 | --- | --- | --- |
-| `--resume-from` | 无；本用途必填 | 已有评分目录，如 `<评测目录>/scorings/scoring/`；沿用保存的回答来源、裁判设置和判决。 |
+| `--resume` | 无；本用途必填 | 已有评分目录，如 `<评测目录>/scorings/scoring/`；沿用保存的回答来源、裁判设置和判决。 |
 | `--no-api` | 关闭；本用途须开启 | 开关；跳过 API 请求、密钥输入及待复核重试，只汇总现有判决并生成阅读报告。 |
 | `--questions-per-file` | `100` | 正整数；每份问答 Markdown 的题数上限。 |

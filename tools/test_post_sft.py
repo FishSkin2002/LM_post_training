@@ -18,7 +18,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, LogitsProcessor, T
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import test_instruct_sft as fixtures
-import evaluate_checkpoint as evaluation
+import evaluate as evaluation
 import utils.math_data as math_data
 import utils.post_training_data as data
 import utils.training.dpo as train_dpo
@@ -220,7 +220,7 @@ class PostSFTTests(unittest.TestCase):
                 patch.object(data, "load_dataset", return_value=Dataset.from_list(rows)), \
                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             continuous = self.root / f"{stage}-full" / "final"
-            training_cli.main([stage, "--config", str(path), "--sft-source", str(sft),
+            training_cli.main([stage, "--config", str(path), "--source", str(sft),
                                "--output-dir", str(continuous.parent)])
             partial = self.root / f"{stage}-resume"
             with patch.object(training, trainer_name, InterruptTrainer), self.assertRaises(fixtures.Interrupted):

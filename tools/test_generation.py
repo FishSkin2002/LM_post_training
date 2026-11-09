@@ -16,7 +16,7 @@ import torch
 import utils.generation as generation
 import utils.training.grpo as train_grpo
 import train as training_common
-import evaluate_checkpoint as evaluation
+import evaluate as evaluation
 import summarize_evaluation as summarizing
 from utils.prepare_sft_data import load_tokenizer
 from utils.prepared_sft_data import load_prepared_sft_data, save_prepared_sft_data
@@ -133,7 +133,7 @@ class GenerationTests(unittest.TestCase):
                     evaluation.evaluate_checkpoint(**source, generation_backend="vllm", auto_batch_size=True,
                                                    output=output)
             terminal = io.StringIO()
-            argv = ["evaluate_checkpoint.py", "--model-name", self.fixture.model_name, "--generation-backend", "vllm",
+            argv = ["evaluate.py", "--checkpoint", self.fixture.model_name, "--generation-backend", "vllm",
                     "--auto-batch-size", "--output", str(output)]
             with patch.object(sys, "argv", argv), redirect_stderr(terminal), self.assertRaises(SystemExit) as caught:
                 evaluation.main()
@@ -289,14 +289,14 @@ class GenerationTests(unittest.TestCase):
     def test_training_handoff_replaces_process_with_saved_final(self):
         final = self.root / "final"
         with patch.object(training_common.os, "execv") as execute:
-            training_common.exec_final_evaluation(final, generation_backend="vllm", prepared_sft_data=self.root / "prepared")
+            training_common.exec_final_evaluation(final, generation_backend="vllm")
         executable, args = execute.call_args.args
         self.assertEqual(executable, sys.executable)
         self.assertIn(str(final), args)
         self.assertIn("--generation-backend", args)
         self.assertEqual(Path(args[1]).name, "train.py")
         self.assertIn(training_common.FINAL_EVALUATION_FLAG, args)
-        self.assertIn("--prepared-sft-data", args)
+        self.assertNotIn("--prepared-sft-data", args)
 
     def test_local_evaluation_failure_never_starts_summary(self):
         final = self.root / "saved-final"
@@ -306,7 +306,7 @@ class GenerationTests(unittest.TestCase):
             training_common.evaluate_saved_training(final)
         summarize.assert_not_called()
         self.assertIn(str(final), str(error.exception))
-        self.assertIn("evaluate_checkpoint.py", str(error.exception))
+        self.assertIn("evaluate.py", str(error.exception))
 
     def test_grpo_training_vllm_requires_fresh_process_even_for_native_final_generation(self):
         final = self.root / "grpo/final"
@@ -318,7 +318,7 @@ class GenerationTests(unittest.TestCase):
         with patch.object(train_grpo, "train", return_value=final), \
                 patch.object(train_grpo, "load_config", return_value=({"trainer": {"use_vllm": True}}, {})), \
                 patch.object(training_common, "exec_final_evaluation") as handoff:
-            training_common.main(["grpo", "--sft-source", str(self.root / "sft/final"),
+            training_common.main(["grpo", "--source", str(self.root / "sft/final"),
                                   "--generation-backend", "transformers"])
         self.assertEqual(handoff.call_args.args[0], final)
         self.assertEqual(handoff.call_args.args[2], "transformers")

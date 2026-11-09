@@ -34,7 +34,7 @@ import utils.training.sft as train_sft
 import train as training_cli
 from utils import arguments
 import utils.training_workflow as workflow
-import evaluate_checkpoint as evaluation
+import evaluate as evaluation
 import summarize_evaluation as summarizing
 import utils.answer_judge as answer_judge
 import utils.generation as generation
@@ -180,9 +180,9 @@ class InstructSFTTests(unittest.TestCase):
         cfg.write_text(yaml.safe_dump({**self.config, "output_dir": str(self.root/name)}))
         argv = ["train.py", "sft", "--config", str(cfg)]
         if resume:
-            argv += ["--resume-from-checkpoint", str(resume)]
+            argv += ["--resume", str(resume)]
         if continue_from:
-            argv += ["--continue-from", str(continue_from), "--additional-epochs", str(epochs)]
+            argv += ["--source", str(continue_from), "--additional-epochs", str(epochs)]
         with patch.object(sys, "argv", argv), patch.object(math_data, "load_dataset", side_effect=self.raw_dataset), \
                 patch.object(AutoTokenizer, "from_pretrained", side_effect=self.load_tokenizer), \
                 patch.object(AutoModelForCausalLM, "from_pretrained", side_effect=self.model_loader), \
@@ -198,8 +198,10 @@ class InstructSFTTests(unittest.TestCase):
         path = output or self.root/f"eval-{self.evaluation_count}.json"
         cfg = self.root/"eval.yaml"
         cfg.write_text(yaml.safe_dump(self.config))
-        argv = ["evaluate_checkpoint.py", "--device", "cpu", "--config", str(cfg), "--output", str(path)]
-        argv += ["--model-name", self.model_name] if original else ["--checkpoint", str(checkpoint)]
+        argv = ["evaluate.py", "--device", "cpu", "--output", str(path)]
+        if original:
+            argv += ["--config", str(cfg)]
+        argv += ["--checkpoint", self.model_name] if original else ["--checkpoint", str(checkpoint)]
         if count is not None:
             argv += ["--num-samples", str(count)]
         if batch_size is not None:
@@ -742,8 +744,8 @@ class InstructSFTTests(unittest.TestCase):
         meta=json.loads((source/"run.json").read_text());meta["text_format"]["system"]="changed"
         (source/"run.json").write_text(json.dumps(meta))
         cfg=self.root/"source.yaml";cfg.write_text(yaml.safe_dump(self.config))
-        calls=[(training_cli,["train.py","sft","--config",str(cfg),"--continue-from",str(source),"--additional-epochs","1"]),
-               (evaluation,["evaluate_checkpoint.py","--checkpoint",str(source)])]
+        calls=[(training_cli,["train.py","sft","--config",str(cfg),"--source",str(source),"--additional-epochs","1"]),
+               (evaluation,["evaluate.py","--checkpoint",str(source)])]
         for module,argv in calls:
             with patch.object(sys,"argv",argv),patch.object(AutoModelForCausalLM,"from_pretrained",side_effect=AssertionError("weights must not load")), \
                     contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):module.main()
@@ -760,8 +762,8 @@ class InstructSFTTests(unittest.TestCase):
         self.assertEqual(stored_evaluation(output),report)
 
     def test_argument_precision_and_atomic_directory_boundaries(self):
-        for options in [("--continue-from","/missing"),("--additional-epochs","1"),
-                        ("--continue-from","/missing","--additional-epochs","nan")]:
+        for options in [("--source","/missing"),("--additional-epochs","1"),
+                        ("--source","/missing","--additional-epochs","nan")]:
             with patch.object(sys,"argv",["train.py","sft",*options]), \
                     patch.object(math_data,"load_dataset",side_effect=AssertionError("reject before data")), \
                     contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):training_cli.main()

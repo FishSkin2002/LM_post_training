@@ -345,7 +345,7 @@ class SummaryTests(unittest.TestCase):
                                    capture_output=True, text=True, check=True)
         self.assertIn("50.00% (1/2)", completed.stdout)
         run = self.last_run()
-        repeated = subprocess.run([sys.executable, script, "--resume-from", str(run)],
+        repeated = subprocess.run([sys.executable, script, "--resume", str(run)],
                                   cwd=self.root, env={**os.environ, "DEEPSEEK_API_KEY": ""},
                                   capture_output=True, text=True, check=True)
         self.assertIn("50.00% (1/2)", repeated.stdout)

@@ -11,16 +11,16 @@ from utils.prepare_sft_data import load_config, load_tokenizer, prepare_dataset,
 from utils.math_data import OPENR1
 from utils.training_workflow import WorkflowTrainer, data_plan, new_run, read_source, reserve_directory, save_run
 from utils.generation import load_generation_config
-from utils.prepared_sft_data import ensure_prepared_sft_data, load_prepared_sft_data
+from utils.data_preparation import prepare_sft
 from train import evaluate_after_training, load_training_model, save_final
 
 
 def train(config_path, *, output_dir=None, resume=None, continue_from=None, additional_epochs=None,
-          generation_config=None, generation_backend=None, prepared_sft_data=None):
+          generation_config=None, generation_backend=None, prepared_sft_data=None, env="current"):
     config = load_config(config_path)
     generation_settings = load_generation_config(generation_config, generation_backend)
     if bool(continue_from) != (additional_epochs is not None):
-        raise ValueError("--continue-from and --additional-epochs must be provided together.")
+        raise ValueError("--source and --additional-epochs must be provided together.")
     if additional_epochs is not None and (not math.isfinite(additional_epochs) or additional_epochs <= 0):
         raise ValueError("additional-epochs must be a finite positive number.")
     if config["data"]["name"] != OPENR1["name"]:
@@ -33,22 +33,21 @@ def train(config_path, *, output_dir=None, resume=None, continue_from=None, addi
     device = "cpu" if config.get("use_cpu") else ("cuda" if torch.cuda.is_available() else "cpu")
     validate_precision(config, device)
     tokenizer = load_tokenizer(source_path or config["model_name"], local_files_only=bool(source_path))
-    prepared = ensure_prepared_sft_data(source_path, metadata, prepared_sft_data,
-                                       metadata.get("prepared_sft_data") if metadata else None)
-    dataset, data_info = (load_prepared_sft_data(prepared, config, tokenizer) if prepared
-                          else prepare_dataset(config, tokenizer))
+    dataset, data_info, environment, cache, prepared = prepare_sft(
+        config, tokenizer, source=source_path, metadata=metadata, env=env,
+        prepared=prepared_sft_data, prepare=prepare_dataset)
     plan = data_plan(dataset, metadata, data_info)
     if resume:
         if output_dir and output_dir.expanduser().resolve() != source_path.parent:
-            raise ValueError("Resume uses the checkpoint's run directory; use --continue-from for a new stage.")
+            raise ValueError("Resume uses the checkpoint's run directory; use --source for a new stage.")
         output_dir = source_path.parent
     else:
         output_dir = reserve_directory(output_dir or config["output_dir"])
         epochs = additional_epochs if continue_from else config["num_train_epochs"]
-        source_environment = metadata.get("data_environment") if metadata else None
         metadata = new_run(config, plan, epochs, source_path)
-        if prepared and source_path:
-            metadata["data_environment"] = source_environment
+    metadata["data_environment"] = environment
+    if cache:
+        metadata["sft_data_cache"] = cache
     if prepared:
         metadata["prepared_sft_data"] = str(prepared)
     save_run(output_dir, metadata)
